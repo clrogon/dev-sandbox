@@ -88,9 +88,10 @@
 .PARAMETER PerplexityApiKey
     Optional PERPLEXITY_API_KEY, enables Strix search capability.
 .PARAMETER GithubUser
-    GitHub username used by Tier 7 (repo listing / clone). Required --
-    there is no default, so Tier 7 will prompt/fail loudly rather than
-    silently listing someone else's repos.
+    GitHub username used by Tier 7 (repo listing / clone). Optional --
+    if omitted, it's resolved from whichever account `gh auth status` is
+    logged in as (via `gh api user`). If that resolution fails, Tier 7
+    skips the repo picker with a warning rather than guessing a username.
 .PARAMETER SentryAuthToken
     Optional SENTRY_AUTH_TOKEN for the Sentry MCP server.
 .PARAMETER SentryOrg
