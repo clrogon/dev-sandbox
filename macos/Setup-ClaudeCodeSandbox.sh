@@ -251,8 +251,10 @@ case "$USER_SHELL_NAME" in
         warn "\$SHELL is '$USER_SHELL_NAME' (not zsh/bash/fish) -- PATH and env vars will be written to $PROFILE_FILE; source it manually from your actual shell's startup file if needed."
         ;;
 esac
-mkdir -p "$(dirname "$PROFILE_FILE")" 2>/dev/null || true
-[ -f "$PROFILE_FILE" ] || : > "$PROFILE_FILE"
+if [ "$DRY_RUN" -ne 1 ]; then
+    mkdir -p "$(dirname "$PROFILE_FILE")" 2>/dev/null || true
+    [ -f "$PROFILE_FILE" ] || : > "$PROFILE_FILE"
+fi
 
 # Escapes a value for safe embedding in a fish single-quoted string (fish's
 # quoting rules differ from bash's -- printf %q produces bash syntax only).

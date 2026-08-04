@@ -1167,7 +1167,7 @@ function Set-StrixEnvironment {
 
 function Install-McpServers {
     <#
-        All five installable MCP servers from the v3.2 spec are pure Node.js
+        All six installable MCP servers from the v3.2 spec are pure Node.js
         packages and run via `npx -y <pkg>` or as global bins. None require
         Docker, so they behave correctly inside Windows Sandbox. Supabase MCP
         talks to a cloud project by default; the local 'supabase start' stack
