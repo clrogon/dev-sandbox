@@ -1,0 +1,102 @@
+DOCUMENTATION REVISION SUMMARY
+================================
+
+Date: 2026-08-04
+Project: dev-sandbox (AI development workstation provisioner)
+Revision Scope: User documentation, troubleshooting guide, maintenance guide
+
+CHANGES MADE:
+
+1. README.md (REVISED)
+   ✓ Improved project tagline (clearer, more concise)
+   ✓ Added "Why use this?" section explaining use cases
+   ✓ Reorganized "What gets installed" with tier descriptions
+   ✓ Added "Key guarantees" subsection highlighting fail-isolation, idempotency, dry-run, exit codes
+   ✓ Expanded platform notes with shell-specific config details
+   ✓ Reorganized quick-start section with clear dry-run → unattended → interactive progression
+   ✓ Restructured parameters into 4 organized tables:
+     - Behavior flags
+     - Identity and secrets
+     - Paths and versions
+     - Skip flags
+   ✓ Improved MCP servers section with server descriptions and setup notes
+   ✓ Clarified "Updating the server list" with step-by-step instructions
+   ✓ Expanded known limitations with actionable guidance
+   ✓ Added links to new documentation files
+
+2. TROUBLESHOOTING.md (NEW)
+   ✓ General issue troubleshooting (admin, PATH, fail-isolated design)
+   ✓ Platform-specific issues (macOS shell config, Windows PowerShell, architecture detection)
+   ✓ MCP server configuration and common pitfalls
+   ✓ Tier 7 (workspace/repo picker) issues
+   ✓ Strix configuration help
+   ✓ Re-running instructions with -Force and -Skip flags
+   ✓ Guided debugging steps
+
+3. MAINTENANCE.md (NEW)
+   ✓ File structure overview
+   ✓ Detailed explanation of MCP single-source-of-truth pattern
+   ✓ Complete tier structure reference table
+   ✓ URL resolution strategy (dynamic vs. pinned)
+   ✓ Fail-isolated execution model
+   ✓ Idempotency mechanism
+   ✓ Dry-run implementation details
+   ✓ Step-by-step guides for common changes:
+     - Adding a new tool
+     - Updating tool versions
+     - Updating MCP servers
+   ✓ Testing strategies (dry-run, Windows Sandbox, integration)
+   ✓ Performance notes
+   ✓ Logging setup
+
+DOCUMENTATION HIERARCHY:
+
+Entry point: README.md
+├─ "Why use this?" → Quick overview of value
+├─ "What gets installed" → Tier breakdown
+├─ "Quick start" → Three paths (dry-run, unattended, interactive)
+├─ "Parameters" → Organized reference
+├─ "MCP servers" → Setup and modification
+├─ "Platform-specific notes" → OS-specific details
+├─ "Known limitations" → Constraints and workarounds
+└─ "More documentation" →
+    ├─ CHANGELOG.md (version history)
+    ├─ TROUBLESHOOTING.md (user guide for common issues)
+    └─ MAINTENANCE.md (developer guide for modifications)
+
+KEY IMPROVEMENTS:
+
+✓ Clarity: Simplified language, clearer examples, better visual hierarchy
+✓ Completeness: Covered all tiers, all major features, platform differences
+✓ Actionability: Step-by-step guidance, copy-paste examples, troubleshooting paths
+✓ Maintainability: Single source of truth documented (config/mcp-packages.json)
+✓ Findability: Organized parameters into logical tables, new troubleshooting guide
+
+VERIFIED AGAINST ACTUAL CODE:
+
+✓ Tier structure (7 tiers + preflight)
+✓ MCP server list (6 servers from config/mcp-packages.json)
+✓ Parameter names and defaults (from script headers)
+✓ Platform differences (Intel/Apple Silicon, zsh/bash/fish)
+✓ Exit codes (0 = success, 2 = failure)
+✓ Fail-isolated execution model
+✓ Known limitations (Docker in Sandbox, Claude Code MCP registration, fallback URLs)
+
+AUDIENCE ASSUMPTIONS:
+
+README.md:
+  - General developer or sysadmin new to the project
+  - Wants quick start with examples
+  - May skip detailed tiers
+
+TROUBLESHOOTING.md:
+  - User who has run the provisioner and hit an issue
+  - Wants actionable solutions
+  - May not understand the tier structure
+
+MAINTENANCE.md:
+  - Developer maintaining or extending the provisioners
+  - Wants to understand architecture before making changes
+  - May need to add tools, update versions, or fix bugs
+
+NOTE: All documentation links to actual code files and follows the "explain the code as it is, not as intended" principle.
