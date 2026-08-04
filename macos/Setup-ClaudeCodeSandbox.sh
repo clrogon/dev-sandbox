@@ -1445,6 +1445,7 @@ select_github_repository() {
     local line n
     while IFS= read -r line; do
         n=$(printf '%s' "$line" | awk -F'\t' '{print $1}')
+        n="${n#*/}"    # gh repo list's first column is "owner/repo" -- keep just the repo name
         [ -n "$n" ] && names+=("$n")
     done < <(gh repo list "$GITHUB_USER" --limit 200 2>/dev/null)
     if [ ${#names[@]} -eq 0 ]; then

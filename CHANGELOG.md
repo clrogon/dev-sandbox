@@ -18,6 +18,18 @@ repo:
   the same bug: the actual `gh repo clone` call was hardcoded to a literal
   username regardless of what `-GithubUser` was set to — fixed to use the
   resolved value.)
+- **Fixed (macOS)**: `select_github_repository()` took the first
+  tab-separated column of plain-text `gh repo list` output and used it
+  directly as the repo name, but that column is actually `owner/repo`, not
+  a bare name (verified live). Every downstream use already re-prepended
+  `$GITHUB_USER` itself, so this produced `gh repo clone
+  "clrogon/clrogon/dev-sandbox"` (invalid) and a destination path with an
+  extra nested owner directory — reproduced the exact clone failure live.
+  This predates all of this session's changes but sits inside the exact
+  function the GithubUser fix above touched: the repo-clone feature has
+  never worked on macOS, independent of how `GITHUB_USER` was set. The
+  PS1 script doesn't have this bug — its `--json name` field is confirmed
+  to already return the bare name.
 - **Removed**: `install_notepad()` / `install_sevenzip()` dead stubs and
   their `-SkipNotepad` / `-SkipSevenZip` flags from the macOS script. Both
   functions only ever printed "Windows-only: skipped on macOS" — the
