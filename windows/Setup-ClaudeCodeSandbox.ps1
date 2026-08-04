@@ -123,7 +123,12 @@
 .PARAMETER LogPath
     Transcript path. Defaults to %USERPROFILE%\Setup-ClaudeCodeSandbox_<ts>.log
 .PARAMETER Architecture
-    Force x64 or arm64 instead of auto-detecting.
+    Force x64 or arm64 instead of auto-detecting. Must be 'x64' or 'arm64'
+    if supplied (validated manually, not via [ValidateSet], so this script
+    still works via `irm <url> | iex` -- ValidateSet on an unset optional
+    parameter throws under Invoke-Expression's current-scope binding, even
+    though the exact same script runs fine as a file or via
+    [scriptblock]::Create()).
 
 .EXAMPLE
     .\Setup-ClaudeCodeSandbox.ps1 -AcceptAll
@@ -193,7 +198,7 @@ param(
     [switch]$AcceptAll,
     [switch]$NoCleanup,
     [string]$LogPath,
-    [ValidateSet('x64', 'arm64')][string]$Architecture
+    [string]$Architecture
 )
 
 Set-StrictMode -Version Latest
@@ -266,6 +271,9 @@ if ($PSScriptRoot) {
 New-Item -ItemType Directory -Path $script:TempDir -Force | Out-Null
 
 if ($Architecture) {
+    if ($Architecture -notin @('x64', 'arm64')) {
+        throw "-Architecture must be 'x64' or 'arm64' (got '$Architecture')."
+    }
     $script:Architecture = $Architecture
 } else {
     $rawArch = if ($env:PROCESSOR_ARCHITEW6432) {

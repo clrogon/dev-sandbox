@@ -95,7 +95,7 @@ curl -fsSL https://raw.githubusercontent.com/clrogon/dev-sandbox/master/macos/Se
     -GitUserName 'Your Name' -GitUserEmail 'you@example.com'
 ```
 
-Both patterns were verified end-to-end against the real hosted files (`-DryRun` on Windows ran the complete tier stack correctly; the macOS one confirmed argument-passing and its Darwin-only guard both work). Since there's no local file in this mode, `config/mcp-packages.json` isn't reachable by a relative path — both scripts detect that and fall back to their embedded copy of the MCP server list automatically.
+The `[scriptblock]::Create(...)` and `bash -s --` patterns were verified end-to-end against the real hosted files (`-DryRun` on Windows ran the complete tier stack correctly; the macOS one confirmed argument-passing and its Darwin-only guard both work). Plain `irm | iex` had a real bug — an optional parameter's `[ValidateSet]` broke under `iex`'s current-scope parameter binding — reproduced and fixed (see CHANGELOG); the underlying script logic was re-verified afterward via `[scriptblock]::Create()`, since `iex` itself couldn't be exercised in the environment that found the bug. Since there's no local file in this mode, `config/mcp-packages.json` isn't reachable by a relative path — both scripts detect that and fall back to their embedded copy of the MCP server list automatically.
 
 **Prefer to inspect before running?** Download first, review it, then execute — this avoids piping a remote script straight into your shell:
 ```powershell

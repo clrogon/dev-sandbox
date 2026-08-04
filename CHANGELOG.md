@@ -10,6 +10,20 @@ and its diff against v3.1 isn't available here; history starts at v3.1.
 Fixes from a review of the v3.1 → v3.2 diff, applied while setting up this
 repo:
 
+- **Fixed**: plain `irm <url> | iex` failed with "The attribute cannot be
+  added because variable Architecture with value  would no longer be
+  valid." Root cause: the optional `-Architecture` parameter used
+  `[ValidateSet('x64', 'arm64')]` with no default value. `Invoke-Expression`
+  binds a piped script's parameters into the *caller's current scope*
+  (unlike normal file execution or `[scriptblock]::Create()`, which use a
+  fresh scope), and that binding path applies `[ValidateSet]` to the
+  parameter's default (empty-string) value before the caller ever supplies
+  one — which fails validation immediately. Reproduced in complete
+  isolation with a two-line repro script (fails under `iex`, succeeds under
+  `[scriptblock]::Create()`, for the exact same parameter declaration).
+  Fixed by dropping `[ValidateSet]` and validating manually where the value
+  is consumed, so plain `irm | iex` (no args) now works, and passing an
+  invalid `-Architecture` value still throws a clear error either way.
 - **Fixed**: the Windows PS1 file had a UTF-8 BOM at byte 0. Running it
   directly as a `.ps1` file was unaffected (PowerShell's file loader strips
   BOMs), but it silently broke remote execution: fetching the raw text with
