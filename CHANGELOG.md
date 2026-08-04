@@ -53,6 +53,17 @@ repo:
   the PostgreSQL DMG URL had a stale `-osx-x64.dmg` suffix that 404s on
   EDB's server regardless of architecture (EDB ships one universal `-osx.dmg`
   per version) — PostgreSQL install was broken on Intel too, not just arm64.
+- **Fixed**: `get_github_asset_url()` (the shared dynamic-resolver helper
+  behind both `install_gh` and `install_supabase`) only matched compact
+  JSON (`"browser_download_url":"..."`). GitHub's API doesn't guarantee
+  that formatting — it serves pretty-printed JSON with a space after the
+  colon for some repos and compact for others, observed to depend on
+  response size. This silently broke the dynamic resolver for GitHub CLI
+  on every run (always falling through to the pinned fallback, never
+  actually reaching GitHub's latest release), while Supabase CLI's
+  resolver happened to keep working by luck of which format that repo's
+  API response used. Found and fixed by running the exact production
+  function against both live API responses, not just re-reading the code.
 - **Fixed**: `persist_env()`/`add_to_path()` referenced `$ZSHENV`/`$ZSHRC`
   variables that were never defined anywhere in the script. Under `set -u`
   (active since line 1), the first call to either function — which happens
@@ -63,6 +74,16 @@ repo:
   using fish's own `set -gx` syntax, anything else → `~/.zshenv` with an
   explicit warning naming the file. All "written to ~/.zshenv" log messages
   now reflect the actual resolved path instead of assuming zsh.
+- **Fixed**: the shell-detection block created `$PROFILE_FILE` and its
+  parent directory (e.g. `~/.config/fish/`) unconditionally at script-load
+  time, before `main()` ever checked `-DryRun` — the one path that slipped
+  through the otherwise-consistent dry-run gating (every actual
+  `add_to_path`/`persist_env` call site was already correctly gated by its
+  caller). Now skipped under `-DryRun` like everything else.
+- Fixed a stale doc count: `Install-McpServers`'s docstring said "five"
+  MCP servers; the list has always had six (predates this session's
+  changes) and disagreed with `config/mcp-packages.json` and the
+  neighboring `Configure-OpencodeMcp` docstring, which already said six.
 
 ## v3.2
 

@@ -331,7 +331,13 @@ get_github_asset_url() {
     local json url
     json=$(curl -fsSL --retry 2 "https://api.github.com/repos/$repo/releases/latest" \
         -H "User-Agent: clrogon-sandbox-setup" 2>/dev/null) || return 1
-    url=$(printf '%s' "$json" | grep -oE '"browser_download_url":"[^"]*"' \
+    # GitHub's API doesn't guarantee compact JSON -- it serves
+    # "browser_download_url":"..." for some repos and "browser_download_url": "..."
+    # (space after the colon) for others, observed to depend on response size.
+    # Match both, or this silently fails and always falls through to the
+    # pinned URL (verified: this bug always broke the gh CLI resolver, but
+    # not Supabase's, purely by luck of which format each repo happened to get).
+    url=$(printf '%s' "$json" | grep -oE '"browser_download_url":[[:space:]]*"[^"]*"' \
         | sed -E 's/.*"([^"]+)"$/\1/' | grep -E "$pattern" | head -1)
     [ -n "$url" ] || return 1
     printf '%s' "$url"
