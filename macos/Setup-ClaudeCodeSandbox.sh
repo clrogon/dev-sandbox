@@ -1356,6 +1356,9 @@ install_docker() {
 # ---------------------------------------------------------------------------
 initialize_workspace() {
     step "Creating clrogon workspace tree"
+    # 'mcp' has no writer right now (the old mcp-config.json generator was
+    # removed as orphaned -- see CHANGELOG) but is kept reserved for real
+    # Claude Code MCP registration if that's added later.
     local folders=(projects archive mcp logs scripts templates powershell architecture security downloads)
     if [ "$DRY_RUN" -eq 1 ]; then
         info "[DRYRUN] Would create $WORKSPACE_ROOT and ${#folders[@]} subfolders."

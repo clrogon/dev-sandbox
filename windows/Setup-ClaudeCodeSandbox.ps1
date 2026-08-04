@@ -222,6 +222,9 @@ $script:UserBinDir       = Join-Path $env:USERPROFILE '.local\bin'
 # Tier 7 workspace state. -WorkspaceRoot is overridable; subfolders are the
 # recommended layout from the v3.2 spec (projects, archive, mcp, logs,
 # scripts, templates, powershell, architecture, security, downloads).
+# 'mcp' has no writer right now (the old mcp-config.json generator was
+# removed as orphaned -- see CHANGELOG) but is kept reserved for real
+# Claude Code MCP registration if that's added later.
 $script:WorkspaceRoot    = $WorkspaceRoot
 $script:WorkspaceFolders = @(
     'projects', 'archive', 'mcp', 'logs',
