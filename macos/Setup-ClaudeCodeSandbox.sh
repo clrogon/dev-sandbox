@@ -106,7 +106,11 @@ GIT_USER_NAME=""; GIT_USER_EMAIL=""; STRIX_LLM=""; STRIX_API_KEY=""
 STRIX_API_BASE=""; PERPLEXITY_API_KEY=""; SENTRY_AUTH_TOKEN=""; SENTRY_ORG=""
 LOG_PATH=""
 
-# MCP servers: "<opencode-key> <npm-package>"
+# MCP servers: "<opencode-key> <npm-package>". This is the embedded fallback
+# -- the real source of truth is ../config/mcp-packages.json, loaded by
+# load_mcp_packages() further down (once the logging helpers exist). Keep
+# this fallback in sync with the JSON so the script still works standalone,
+# outside a clone of the dev-sandbox repo.
 MCP_PACKAGES=(
   "github     @modelcontextprotocol/server-github"
   "sequential @modelcontextprotocol/server-sequential-thinking"
@@ -190,6 +194,34 @@ record() { RESULTS+=("$1|$2|$3"); }
 # Environment helpers
 # ---------------------------------------------------------------------------
 command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+# Overrides the embedded MCP_PACKAGES default from ../config/mcp-packages.json
+# if present and parseable. Pure grep/sed -- no python3/node dependency, since
+# this runs before Tier 1 (Node.js) has necessarily installed anything.
+load_mcp_packages() {
+    local script_dir config_path line key pkg
+    local loaded=()
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+    config_path="$script_dir/../config/mcp-packages.json"
+    [ -f "$config_path" ] || return 0
+    while IFS= read -r line; do
+        case "$line" in
+            *'"key"'*'"package"'*)
+                key=$(printf '%s' "$line" | sed -E 's/.*"key"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
+                pkg=$(printf '%s' "$line" | sed -E 's/.*"package"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/')
+                if [ -n "$key" ] && [ -n "$pkg" ]; then
+                    loaded+=("$key $pkg")
+                fi
+                ;;
+        esac
+    done < "$config_path"
+    if [ ${#loaded[@]} -eq 0 ]; then
+        warn "$config_path has no valid entries -- using the embedded MCP server list."
+        return 0
+    fi
+    MCP_PACKAGES=("${loaded[@]}")
+}
+load_mcp_packages
 
 add_to_path() {
     local dir="$1"
@@ -730,18 +762,23 @@ configure_opencode_mcp() {
         return 0
     fi
     mkdir -p "$config_dir"
+    # Pass MCP_PACKAGES (already loaded from config/mcp-packages.json, or the
+    # embedded fallback) as "key=pkg" argv pairs, so this stays in sync with
+    # install_mcp_servers without a second hardcoded server list.
+    local entry pairs=()
+    for entry in "${MCP_PACKAGES[@]}"; do
+        pairs+=("${entry%% *}=${entry##* }")
+    done
     # Merge with node: robust JSON handling, no BOM, array-style commands.
     node -e '
 const fs = require("fs");
 const path = process.argv[1];
-const servers = {
-  "github":     "@modelcontextprotocol/server-github",
-  "sequential": "@modelcontextprotocol/server-sequential-thinking",
-  "memory":     "@modelcontextprotocol/server-memory",
-  "context7":   "@upstash/context7-mcp",
-  "sentry":     "@sentry/mcp-server",
-  "supabase":   "@supabase/mcp-server-supabase"
-};
+const pairs = process.argv.slice(2);
+const servers = {};
+for (const p of pairs) {
+  const i = p.indexOf("=");
+  servers[p.slice(0, i)] = p.slice(i + 1);
+}
 let cfg = {};
 try { cfg = JSON.parse(fs.readFileSync(path, "utf8")); } catch (e) { cfg = {}; }
 cfg.mcp = cfg.mcp || {};
@@ -750,7 +787,7 @@ for (const key of Object.keys(servers)) {
 }
 cfg["$schema"] = cfg["$schema"] || "https://opencode.ai/config.json";
 fs.writeFileSync(path, JSON.stringify(cfg, null, 2) + "\n");
-' "$config_path"
+' "$config_path" "${pairs[@]}"
     local rc=$?
     if [ "$rc" -eq 0 ]; then
         ok "MCP servers registered in opencode global config: $config_path"

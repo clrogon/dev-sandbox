@@ -78,6 +78,33 @@ Run either script with no arguments and no `-AcceptAll` for interactive
 prompts, or see the script's own header comment / `Get-Help` for the full
 parameter reference.
 
+## MCP server list: single source of truth
+
+Both scripts install the same six MCP servers and register them with
+opencode. The list lives in one place, [`config/mcp-packages.json`](config/mcp-packages.json):
+
+```json
+{
+  "servers": [
+    { "key": "github", "package": "@modelcontextprotocol/server-github" },
+    ...
+  ]
+}
+```
+
+At startup, each script resolves this file relative to its own location
+(`../config/mcp-packages.json`) and loads it — the PS1 script via
+`ConvertFrom-Json`, the SH script via a small grep/sed parser (no
+node/python3 dependency, since this runs before Tier 1 may have installed
+Node.js). If the file is missing or unparseable, each script falls back to
+an embedded copy of the same list, so a lone downloaded script still works
+outside a clone of this repo. **To add, remove, or rename an MCP server,
+edit `config/mcp-packages.json` and update both scripts' embedded fallback
+copies to match** — everything that installs or registers servers
+(`Install-McpServers`/`install_mcp_servers`,
+`Configure-OpencodeMcp`/`configure_opencode_mcp`) reads from the same loaded
+list, so there's nothing else to change.
+
 ## Known limitations
 
 - **macOS = Intel only.** See the platform constraint above.
@@ -87,11 +114,6 @@ parameter reference.
   generator was removed because nothing actually consumed it; re-adding
   Claude Code MCP registration is tracked as future work, most likely via
   `claude mcp add-json` rather than hand-writing Claude Code's config file.
-- **MCP server list is duplicated** across the two scripts (flat array in
-  PS1, key/package pairs in SH, plus a third copy inline in each
-  `Configure-OpencodeMcp` / `configure_opencode_mcp` Node snippet). Planned
-  fix: a single `config/mcp-packages.json` source of truth that both scripts
-  read from. Not yet implemented.
 - Pinned fallback download URLs (Git, Python, Node, Notepad++, GH CLI,
   Supabase CLI, 7-Zip) are checked weekly by
   [`.github/workflows/link-check.yml`](.github/workflows/link-check.yml),

@@ -227,14 +227,37 @@ $script:WorkspaceFolders = @(
     'scripts', 'templates', 'powershell',
     'architecture', 'security', 'downloads'
 )
-$script:McpPackages       = @(
-    '@modelcontextprotocol/server-github',
-    '@modelcontextprotocol/server-sequential-thinking',
-    '@modelcontextprotocol/server-memory',
-    '@upstash/context7-mcp',
-    '@sentry/mcp-server',
-    '@supabase/mcp-server-supabase'
-)
+# Single source of truth for the MCP server list is ../config/mcp-packages.json
+# (shared with the macOS script). Falls back to this embedded copy so the
+# script still works standalone -- e.g. downloaded as a lone file, outside a
+# clone of the dev-sandbox repo. Keep this fallback in sync with the JSON.
+$script:McpServerMap = [ordered]@{
+    github     = '@modelcontextprotocol/server-github'
+    sequential = '@modelcontextprotocol/server-sequential-thinking'
+    memory     = '@modelcontextprotocol/server-memory'
+    context7   = '@upstash/context7-mcp'
+    sentry     = '@sentry/mcp-server'
+    supabase   = '@supabase/mcp-server-supabase'
+}
+if ($PSScriptRoot) {
+    $mcpConfigPath = Join-Path $PSScriptRoot '..\config\mcp-packages.json'
+    if (Test-Path -LiteralPath $mcpConfigPath) {
+        try {
+            $mcpJson = Get-Content -Raw -LiteralPath $mcpConfigPath | ConvertFrom-Json
+            $loaded  = [ordered]@{}
+            foreach ($entry in $mcpJson.servers) {
+                if ($entry.key -and $entry.package) { $loaded[$entry.key] = $entry.package }
+            }
+            if ($loaded.Count -gt 0) {
+                $script:McpServerMap = $loaded
+            } else {
+                Write-Warning "$mcpConfigPath has no valid entries -- using the embedded MCP server list."
+            }
+        } catch {
+            Write-Warning "Could not parse $mcpConfigPath ($($_.Exception.Message)) -- using the embedded MCP server list."
+        }
+    }
+}
 
 New-Item -ItemType Directory -Path $script:TempDir -Force | Out-Null
 
@@ -1153,10 +1176,12 @@ function Install-McpServers {
         Set-Result -Tool 'MCP servers' -Status 'Skipped' -Detail 'npm unavailable.'
         return
     }
+    $packages = @($script:McpServerMap.Values)
+
     if ($DryRun) {
-        Write-Info "[DRYRUN] Would install $($script:McpPackages.Count) MCP packages via npm -g:"
-        foreach ($pkg in $script:McpPackages) { Write-Info "  - $pkg" }
-        Set-Result -Tool 'MCP servers' -Status 'DryRun' -Detail ($script:McpPackages -join ', ')
+        Write-Info "[DRYRUN] Would install $($packages.Count) MCP packages via npm -g:"
+        foreach ($pkg in $packages) { Write-Info "  - $pkg" }
+        Set-Result -Tool 'MCP servers' -Status 'DryRun' -Detail ($packages -join ', ')
         return
     }
     if (-not $PSCmdlet.ShouldProcess('MCP servers', 'npm install -g (multiple packages)')) {
@@ -1168,7 +1193,7 @@ function Install-McpServers {
     $installed = 0
     $failed    = @()
 
-    foreach ($pkg in $script:McpPackages) {
+    foreach ($pkg in $packages) {
         Write-Info "Installing $pkg ..."
         # npm is a .cmd shim -- use the call operator, not Start-Process.
         & npm install -g $pkg --no-fund --no-audit
@@ -1183,8 +1208,8 @@ function Install-McpServers {
     Update-SessionPath
 
     if ($failed.Count -eq 0) {
-        Write-Ok "All $($script:McpPackages.Count) MCP servers installed."
-        Set-Result -Tool 'MCP servers' -Status 'Installed' -Detail "$installed/$($script:McpPackages.Count) packages"
+        Write-Ok "All $($packages.Count) MCP servers installed."
+        Set-Result -Tool 'MCP servers' -Status 'Installed' -Detail "$installed/$($packages.Count) packages"
     } elseif ($installed -gt 0) {
         Write-Warn2 "Partial MCP install: $installed succeeded, $($failed.Count) failed ($($failed -join ', '))."
         Set-Result -Tool 'MCP servers' -Status 'Warning' -Detail "Failed: $($failed -join ', ')"
@@ -1211,14 +1236,7 @@ function Configure-OpencodeMcp {
 
     $configDir  = Join-Path $env:USERPROFILE '.config\opencode'
     $configPath = Join-Path $configDir 'opencode.json'
-    $serverMap = [ordered]@{
-        github     = '@modelcontextprotocol/server-github'
-        sequential = '@modelcontextprotocol/server-sequential-thinking'
-        memory     = '@modelcontextprotocol/server-memory'
-        context7   = '@upstash/context7-mcp'
-        sentry     = '@sentry/mcp-server'
-        supabase   = '@supabase/mcp-server-supabase'
-    }
+    $serverMap  = $script:McpServerMap
 
     if ($DryRun) {
         Write-Info "[DRYRUN] Would register $($serverMap.Count) MCP servers in $configPath"

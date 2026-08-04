@@ -33,6 +33,14 @@ repo:
   header comment, and a couple of header lines that described defaults
   ("Git identity (clrogon default)") that didn't match what the code
   actually falls back to (`"Sandbox User"`).
+- **Refactored**: the MCP server list (6 servers) was previously hardcoded
+  in four places (a flat array + an inline Node object per script). It now
+  lives once in [`config/mcp-packages.json`](config/mcp-packages.json);
+  both scripts load it at runtime relative to their own location and fall
+  back to an embedded copy if it's missing, so a lone downloaded script
+  still works standalone. `Install-McpServers`/`install_mcp_servers` and
+  `Configure-OpencodeMcp`/`configure_opencode_mcp` now both read from the
+  same loaded list instead of maintaining their own copy.
 
 ## v3.2
 

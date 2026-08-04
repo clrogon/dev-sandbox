@@ -1,0 +1,11 @@
+{
+  "$comment": "Single source of truth for the MCP servers both provisioners install and register with opencode. Both windows/Setup-ClaudeCodeSandbox.ps1 and macos/Setup-ClaudeCodeSandbox.sh load this file at runtime (resolved relative to their own location) and fall back to an embedded copy of this same list if it's missing -- keeps each script usable standalone, outside a clone of this repo.",
+  "servers": [
+    { "key": "github",     "package": "@modelcontextprotocol/server-github" },
+    { "key": "sequential", "package": "@modelcontextprotocol/server-sequential-thinking" },
+    { "key": "memory",     "package": "@modelcontextprotocol/server-memory" },
+    { "key": "context7",   "package": "@upstash/context7-mcp" },
+    { "key": "sentry",     "package": "@sentry/mcp-server" },
+    { "key": "supabase",   "package": "@supabase/mcp-server-supabase" }
+  ]
+}
