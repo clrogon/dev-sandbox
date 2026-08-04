@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     Unattended developer-toolchain provisioner for Windows and Windows Sandbox.

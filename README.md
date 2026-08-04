@@ -69,6 +69,50 @@ The Windows script uses direct MSI/EXE downloads with explicit exit-code handlin
 
 ## Quick start
 
+### One-liner install (no clone needed)
+
+Both scripts can be fetched and run directly from GitHub, the same way `irm https://claude.ai/install.ps1 | iex` installs Claude Code itself.
+
+**Windows (PowerShell) — no arguments (prompts interactively):**
+```powershell
+irm https://raw.githubusercontent.com/clrogon/dev-sandbox/master/windows/Setup-ClaudeCodeSandbox.ps1 | iex
+```
+
+**Windows (PowerShell) — with arguments:** a raw pipe into `iex` can't take arguments, so pass them through `[scriptblock]::Create(...)` instead:
+```powershell
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/clrogon/dev-sandbox/master/windows/Setup-ClaudeCodeSandbox.ps1))) -AcceptAll `
+    -GitUserName 'Your Name' -GitUserEmail 'you@example.com'
+```
+
+**macOS (bash) — no arguments (prompts interactively):**
+```bash
+curl -fsSL https://raw.githubusercontent.com/clrogon/dev-sandbox/master/macos/Setup-ClaudeCodeSandbox.sh | bash
+```
+
+**macOS (bash) — with arguments:** `bash -s --` passes everything after `--` straight to the script:
+```bash
+curl -fsSL https://raw.githubusercontent.com/clrogon/dev-sandbox/master/macos/Setup-ClaudeCodeSandbox.sh | bash -s -- -AcceptAll \
+    -GitUserName 'Your Name' -GitUserEmail 'you@example.com'
+```
+
+Both patterns were verified end-to-end against the real hosted files (`-DryRun` on Windows ran the complete tier stack correctly; the macOS one confirmed argument-passing and its Darwin-only guard both work). Since there's no local file in this mode, `config/mcp-packages.json` isn't reachable by a relative path — both scripts detect that and fall back to their embedded copy of the MCP server list automatically.
+
+**Prefer to inspect before running?** Download first, review it, then execute — this avoids piping a remote script straight into your shell:
+```powershell
+# Windows
+irm https://raw.githubusercontent.com/clrogon/dev-sandbox/master/windows/Setup-ClaudeCodeSandbox.ps1 -OutFile install.ps1
+# ...review install.ps1...
+.\install.ps1 -DryRun
+Remove-Item install.ps1
+```
+```bash
+# macOS
+curl -fsSL https://raw.githubusercontent.com/clrogon/dev-sandbox/master/macos/Setup-ClaudeCodeSandbox.sh -o install.sh
+# ...review install.sh...
+bash install.sh -DryRun
+rm install.sh
+```
+
 ### Try it dry-run first
 
 Before running for real, see what will be installed:

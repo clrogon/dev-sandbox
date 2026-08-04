@@ -10,6 +10,17 @@ and its diff against v3.1 isn't available here; history starts at v3.1.
 Fixes from a review of the v3.1 → v3.2 diff, applied while setting up this
 repo:
 
+- **Fixed**: the Windows PS1 file had a UTF-8 BOM at byte 0. Running it
+  directly as a `.ps1` file was unaffected (PowerShell's file loader strips
+  BOMs), but it silently broke remote execution: fetching the raw text with
+  `Invoke-RestMethod` and passing it to `[scriptblock]::Create()` — the
+  pattern needed to support `irm <url> | iex`-style one-liner installs with
+  arguments — failed with "Unexpected attribute 'CmdletBinding'" because the
+  leading BOM character stopped the parser from recognizing the top-level
+  `[CmdletBinding()]`/`param()` block. Reproduced against the real hosted
+  file, fixed by stripping the BOM, then re-verified the complete script
+  runs correctly end-to-end (`-DryRun`) via the exact one-liner pattern
+  against the live raw URL. The macOS script never had a BOM.
 - **Fixed**: `-GithubUser` no longer defaults to a hardcoded personal
   GitHub username on either platform. Tier 7's repo picker now resolves the
   account from `gh auth status`/`gh api user` when `-GithubUser` is omitted,
