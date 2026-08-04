@@ -7,7 +7,7 @@ stage model.
 | Platform | Script |
 |---|---|
 | Windows / Windows Sandbox | [`windows/Setup-ClaudeCodeSandbox.ps1`](windows/Setup-ClaudeCodeSandbox.ps1) |
-| macOS (Intel / x86_64 only — see below) | [`macos/Setup-ClaudeCodeSandbox.sh`](macos/Setup-ClaudeCodeSandbox.sh) |
+| macOS (Intel and Apple Silicon) | [`macos/Setup-ClaudeCodeSandbox.sh`](macos/Setup-ClaudeCodeSandbox.sh) |
 
 Both scripts install, in dependency order: Git → Python → Node.js (Tier 1),
 uv/Bun/Deno (Tier 2), GitHub CLI / Claude Code / opencode / Vite / Grok /
@@ -21,16 +21,23 @@ eslint, gopls, rust-analyzer (Tier 4.5), git identity / Strix / Sentry env
 Every stage is fail-isolated (one tool failing doesn't abort the run), every
 stage is idempotent (safe to re-run), and every stage honors `-DryRun`.
 
-## ⚠️ Platform constraint: macOS script is Intel/x86_64 only
+## Platform notes
 
-`macos/Setup-ClaudeCodeSandbox.sh` checks `uname -m` at startup and **exits
-immediately on Apple Silicon (arm64)** — it does not attempt Rosetta or an
-arm64 code path. The direct-download URLs and dynamic resolvers it uses are
-not architecture-aware. If you're on an M-series Mac, this script is not
-usable as-is; either run it under Rosetta 2 with an x86_64 shell, or treat it
-as a reference for what an arm64 branch would need to cover (Homebrew-based
-installs for Python/Node/VS Code use the same paths on both architectures,
-but the pinned fallback URLs for Git/Node/Python etc. do not).
+`macos/Setup-ClaudeCodeSandbox.sh` runs natively on both Intel (x86_64) and
+Apple Silicon (arm64) Macs — it detects `uname -m` once at startup and picks
+the right download for every tool that needs an arch-specific asset
+(GitHub CLI, Supabase CLI, VS Code, Docker Desktop, Go). Git, Python, and
+Node.js already ship universal/multi-arch installers upstream, so those
+paths are identical on both architectures. Anything other than x86_64/arm64
+(e.g. running under an unusual emulation layer) is rejected with an explicit
+error rather than silently misbehaving.
+
+`macos/Setup-ClaudeCodeSandbox.sh` also detects your actual login shell
+(`$SHELL`) before persisting PATH updates or env vars (Sentry/Strix tokens,
+`CLAUDIO_CURRENT_REPO`) — zsh gets `~/.zshenv`, bash gets `~/.bash_profile`,
+fish gets `~/.config/fish/config.fish` with fish's own `set -gx` syntax, and
+anything else falls back to `~/.zshenv` with an explicit warning telling you
+where it wrote to. It no longer assumes zsh unconditionally.
 
 ## Usage
 
@@ -107,7 +114,6 @@ list, so there's nothing else to change.
 
 ## Known limitations
 
-- **macOS = Intel only.** See the platform constraint above.
 - **MCP config**: only opencode gets a config file written
   (`~/.config/opencode/opencode.json`) — there is currently no equivalent
   wiring for Claude Code's own MCP registration. A prior `mcp-config.json`

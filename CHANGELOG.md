@@ -41,6 +41,28 @@ repo:
   still works standalone. `Install-McpServers`/`install_mcp_servers` and
   `Configure-OpencodeMcp`/`configure_opencode_mcp` now both read from the
   same loaded list instead of maintaining their own copy.
+- **Fixed (macOS, Apple Silicon)**: the script no longer exits unconditionally
+  on arm64. It now detects `$ARCH` once and picks the right asset for every
+  tool that publishes an arch-specific build (GitHub CLI, Supabase CLI,
+  VS Code, Docker Desktop, Go) — Git/Python/Node.js already ship
+  universal/multi-arch installers, so those needed no change. GitHub CLI
+  additionally had a broken dynamic-resolver pattern and a dead pinned
+  fallback URL (`.tar.gz`, but GitHub CLI has published `.zip` on macOS for
+  a while) — both fixed as part of the same change, on both architectures.
+  Also fixed a latent, unrelated bug found while verifying installer URLs:
+  the PostgreSQL DMG URL had a stale `-osx-x64.dmg` suffix that 404s on
+  EDB's server regardless of architecture (EDB ships one universal `-osx.dmg`
+  per version) — PostgreSQL install was broken on Intel too, not just arm64.
+- **Fixed**: `persist_env()`/`add_to_path()` referenced `$ZSHENV`/`$ZSHRC`
+  variables that were never defined anywhere in the script. Under `set -u`
+  (active since line 1), the first call to either function — which happens
+  early, e.g. right after installing Python — would abort the entire run
+  with "unbound variable." Both functions now detect the user's actual
+  login shell (`$SHELL`) and write to the file it really sources: zsh →
+  `~/.zshenv`, bash → `~/.bash_profile`, fish → `~/.config/fish/config.fish`
+  using fish's own `set -gx` syntax, anything else → `~/.zshenv` with an
+  explicit warning naming the file. All "written to ~/.zshenv" log messages
+  now reflect the actual resolved path instead of assuming zsh.
 
 ## v3.2
 

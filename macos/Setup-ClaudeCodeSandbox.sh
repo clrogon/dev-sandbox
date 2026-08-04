@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Setup-ClaudeCodeSandbox.sh  (macOS Intel / x86_64)
+# Setup-ClaudeCodeSandbox.sh  (macOS -- Intel/x86_64 and Apple Silicon/arm64)
 # v3.2 -- direct-download developer toolchain provisioner for macOS.
 #
 # Port of the Windows PowerShell provisioner (Setup-ClaudeCodeSandbox.ps1)
@@ -10,7 +10,7 @@
 # omitted), no aborting the whole run on a single tool failure.
 #
 # TIERS (identical dependency order to the Windows build):
-#   Tier 0   Preflight   macOS + x86_64 check, admin/sudo check, log tee
+#   Tier 0   Preflight   macOS + arch check (x86_64/arm64), admin/sudo check, log tee
 #   Tier 1   Runtimes    Git (Xcode CLT) -> Python -> Node.js
 #   Tier 2   Toolchains  uv -> Bun -> Deno
 #   Tier 3   CLI layer   GitHub CLI -> Claude Code -> OpenCode -> Vite
@@ -33,7 +33,7 @@
 #                        runtime (Node/uv/Go/Rust) is unavailable.
 #   Tier 5   Config      Git identity ("Sandbox User" fallback if unset),
 #                        Strix env vars, Sentry env vars
-#   Tier 6   Docker      Docker Desktop (Intel Mac), opt-in, LAST
+#   Tier 6   Docker      Docker Desktop (Intel or Apple Silicon), opt-in, LAST
 #   Tier 7   Workspace   ~/Git/clrogon tree (override -WorkspaceRoot),
 #                        gh auth login, interactive repo picker, clone into
 #                        $WORKSPACE/projects, open in VS Code, persist
@@ -54,10 +54,11 @@
 # config only at startup -- restart it after the run for the MCP tools to
 # appear.
 #
-# STRIX NOTE: scans run inside a Docker container. On an Intel Mac, Docker
-# Desktop works (HyperKit), so scans run once the engine is up. If the Rust
-# build of litellm fails (no Xcode CLT), a pure-Python litellm<1.89.0
-# fallback is used, same as the Windows build.
+# STRIX NOTE: scans run inside a Docker container. Docker Desktop works on
+# both Intel (HyperKit) and Apple Silicon (Apple Virtualization.framework),
+# so scans run once the engine is up. If the Rust build of litellm fails (no
+# Xcode CLT), a pure-Python litellm<1.89.0 fallback is used, same as the
+# Windows build.
 #
 # USAGE:
 #   ./Setup-ClaudeCodeSandbox-macOS.sh -AcceptAll
@@ -83,6 +84,7 @@ set -u
 # ---------------------------------------------------------------------------
 # Config + defaults
 # ---------------------------------------------------------------------------
+ARCH="$(uname -m)"    # x86_64 or arm64 -- picks the right asset for gh/supabase/vscode/docker below
 WORKSPACE_ROOT="${WORKSPACE_ROOT:-$HOME/Git/clrogon}"
 # Pinned fallbacks — used only when the dynamic resolver (API / scrape) fails.
 # Last audited: 2026-08-03.  Dynamic resolvers are the source of truth.
@@ -223,6 +225,44 @@ load_mcp_packages() {
 }
 load_mcp_packages
 
+# ---------------------------------------------------------------------------
+# Shell-aware persistence target
+# ---------------------------------------------------------------------------
+# macOS has defaulted to zsh since Catalina, but don't assume it: detect the
+# user's actual login shell via $SHELL and write PATH/env exports to the
+# file that shell actually sources. fish gets fish syntax (`set -gx`, not
+# `export`); anything unrecognized falls back to ~/.zshenv but says so
+# explicitly, rather than silently guessing.
+USER_SHELL_NAME="$(basename "${SHELL:-/bin/zsh}")"
+case "$USER_SHELL_NAME" in
+    fish)
+        PROFILE_FILE="$HOME/.config/fish/config.fish"
+        ;;
+    bash)
+        # Terminal.app launches login shells, which read .bash_profile, not
+        # .bashrc, on macOS.
+        PROFILE_FILE="$HOME/.bash_profile"
+        ;;
+    zsh)
+        PROFILE_FILE="${ZDOTDIR:-$HOME}/.zshenv"
+        ;;
+    *)
+        PROFILE_FILE="$HOME/.zshenv"
+        warn "\$SHELL is '$USER_SHELL_NAME' (not zsh/bash/fish) -- PATH and env vars will be written to $PROFILE_FILE; source it manually from your actual shell's startup file if needed."
+        ;;
+esac
+mkdir -p "$(dirname "$PROFILE_FILE")" 2>/dev/null || true
+[ -f "$PROFILE_FILE" ] || : > "$PROFILE_FILE"
+
+# Escapes a value for safe embedding in a fish single-quoted string (fish's
+# quoting rules differ from bash's -- printf %q produces bash syntax only).
+fish_quote() {
+    local v="$1"
+    v="${v//\\/\\\\}"
+    v="${v//\'/\\\'}"
+    printf "'%s'" "$v"
+}
+
 add_to_path() {
     local dir="$1"
     [ -d "$dir" ] || return 1
@@ -230,9 +270,14 @@ add_to_path() {
         *":$dir:"*) ;;
         *) export PATH="$dir:$PATH" ;;
     esac
-    # Persist for new zsh sessions (macOS default shell).
-    if ! grep -qsF "export PATH=\"$dir" "$ZSHRC"; then
-        printf 'export PATH="%s:$PATH"\n' "$dir" >> "$ZSHRC"
+    if [ "$USER_SHELL_NAME" = "fish" ]; then
+        if ! grep -qsF "fish_add_path $dir" "$PROFILE_FILE"; then
+            printf 'fish_add_path %s\n' "$dir" >> "$PROFILE_FILE"
+        fi
+    else
+        if ! grep -qsF "export PATH=\"$dir" "$PROFILE_FILE"; then
+            printf 'export PATH="%s:$PATH"\n' "$dir" >> "$PROFILE_FILE"
+        fi
     fi
 }
 
@@ -240,10 +285,17 @@ persist_env() {
     local name="$1" value="$2"
     [ -z "$value" ] && return 0
     export "$name=$value"
-    if grep -qsF "export $name=" "$ZSHENV"; then
-        sed -i '' "/^export $name=/d" "$ZSHENV"
+    if [ "$USER_SHELL_NAME" = "fish" ]; then
+        if grep -qsF "set -gx $name " "$PROFILE_FILE"; then
+            sed -i '' "/^set -gx $name /d" "$PROFILE_FILE"
+        fi
+        printf 'set -gx %s %s\n' "$name" "$(fish_quote "$value")" >> "$PROFILE_FILE"
+    else
+        if grep -qsF "export $name=" "$PROFILE_FILE"; then
+            sed -i '' "/^export $name=/d" "$PROFILE_FILE"
+        fi
+        printf 'export %s=%q\n' "$name" "$value" >> "$PROFILE_FILE"
     fi
-    printf 'export %s=%q\n' "$name" "$value" >> "$ZSHENV"
 }
 
 # ---------------------------------------------------------------------------
@@ -500,10 +552,14 @@ install_gh() {
         record "GitHub CLI" "Present" ""
         return 0
     fi
+    # GitHub CLI publishes per-arch .zip assets on macOS (gh_X.Y.Z_macOS_<arch>.zip);
+    # there is no universal build and no .tar.gz any more.
+    local gh_arch
+    if [ "$ARCH" = "arm64" ]; then gh_arch="arm64"; else gh_arch="amd64"; fi
     local url
-    url=$(get_github_asset_url "cli/cli" 'macOS_amd64\.tar\.gz$') || true
+    url=$(get_github_asset_url "cli/cli" "macOS_${gh_arch}\.zip\$") || true
     if [ -z "$url" ]; then
-        url="https://github.com/cli/cli/releases/download/v2.96.0/gh_2.96.0_macOS_amd64.tar.gz"
+        url="https://github.com/cli/cli/releases/download/v2.97.0/gh_2.97.0_macOS_${gh_arch}.zip"
         warn "Using pinned fallback for GitHub CLI."
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -511,14 +567,14 @@ install_gh() {
         record "GitHub CLI" "DryRun" "$url"
         return 0
     fi
-    local tgz="$SETUP_TMP/$(basename "$url")"
-    if ! download "$url" "$tgz" "GitHub CLI"; then
+    local zip="$SETUP_TMP/$(basename "$url")"
+    if ! download "$url" "$zip" "GitHub CLI"; then
         record "GitHub CLI" "Failed" "Download failed."
         return 1
     fi
     local extract="$SETUP_TMP/gh-extract"
     rm -rf "$extract"; mkdir -p "$extract"
-    tar -xzf "$tgz" -C "$extract"
+    unzip -q "$zip" -d "$extract"
     local ghbin share
     ghbin=$(find "$extract" -name gh -type f 2>/dev/null | head -1)
     if [ -z "$ghbin" ]; then
@@ -588,10 +644,12 @@ install_supabase() {
         return 0
     fi
     warn "'supabase start' needs the Docker engine (which needs virtualization). Remote commands (login, link, db push/pull, functions deploy, gen types) work normally."
+    local sb_arch
+    if [ "$ARCH" = "arm64" ]; then sb_arch="arm64"; else sb_arch="amd64"; fi
     local url
-    url=$(get_github_asset_url "supabase/cli" 'darwin_amd64\.tar\.gz$') || true
+    url=$(get_github_asset_url "supabase/cli" "darwin_${sb_arch}\.tar\.gz\$") || true
     if [ -z "$url" ]; then
-        url="https://github.com/supabase/cli/releases/download/v2.111.0/supabase_2.111.0_darwin_amd64.tar.gz"
+        url="https://github.com/supabase/cli/releases/download/v2.111.0/supabase_2.111.0_darwin_${sb_arch}.tar.gz"
         warn "Using pinned fallback for Supabase CLI."
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
@@ -807,15 +865,15 @@ configure_sentry_environment() {
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
-        info "[DRYRUN] Would set SENTRY_AUTH_TOKEN / SENTRY_ORG in ~/.zshenv."
+        info "[DRYRUN] Would set SENTRY_AUTH_TOKEN / SENTRY_ORG in $PROFILE_FILE."
         record "Sentry config" "DryRun" ""
         return 0
     fi
-    warn "Tokens are written to ~/.zshenv and exported for the session. Clear them when done."
+    warn "Tokens are written to $PROFILE_FILE and exported for the session. Clear them when done."
     persist_env "SENTRY_AUTH_TOKEN" "$SENTRY_AUTH_TOKEN"
     persist_env "SENTRY_ORG" "$SENTRY_ORG"
     ok "Sentry MCP environment configured."
-    record "Sentry config" "Installed" "Env vars set in ~/.zshenv."
+    record "Sentry config" "Installed" "Env vars set in $PROFILE_FILE."
 }
 
 # ---------------------------------------------------------------------------
@@ -828,13 +886,15 @@ install_vscode() {
         record "VS Code" "Present" ""
         return 0
     fi
-    local url="https://update.code.visualstudio.com/latest/darwin/stable"
+    local vscode_channel
+    if [ "$ARCH" = "arm64" ]; then vscode_channel="darwin-arm64"; else vscode_channel="darwin"; fi
+    local url="https://update.code.visualstudio.com/latest/${vscode_channel}/stable"
     if [ "$DRY_RUN" -eq 1 ]; then
         info "[DRYRUN] Would install VS Code from $url"
         record "VS Code" "DryRun" "$url"
         return 0
     fi
-    local zip="$SETUP_TMP/VSCode-darwin.zip"
+    local zip="$SETUP_TMP/VSCode-${vscode_channel}.zip"
     if ! download "$url" "$zip" "VS Code"; then
         record "VS Code" "Failed" "Download failed."
         return 1
@@ -872,7 +932,10 @@ install_postgresql() {
         record "PostgreSQL" "Present" ""
         return 0
     fi
-    local url="https://get.enterprisedb.com/postgresql/postgresql-$POSTGRES_VERSION-osx-x64.dmg"
+    # EDB ships one universal dmg per version, no arch suffix -- "-osx-x64.dmg"
+    # 404s (verified 2026-08-04); this also silently fixes the install on
+    # Intel Macs, which was broken by the same stale filename.
+    local url="https://get.enterprisedb.com/postgresql/postgresql-$POSTGRES_VERSION-osx.dmg"
     if [ "$DRY_RUN" -eq 1 ]; then
         info "[DRYRUN] Would install PostgreSQL $POSTGRES_VERSION from $url (superuser password: postgres)."
         record "PostgreSQL" "DryRun" "$url"
@@ -1039,7 +1102,7 @@ install_go_lsp() {
         # Download the official .pkg from go.dev. ~80 MB.
         local go_ver="${GO_VERSION:-1.23.4}"
         local arch_label
-        if [ "$(uname -m)" = "arm64" ]; then arch_label="arm64"; else arch_label="amd64"; fi
+        if [ "$ARCH" = "arm64" ]; then arch_label="arm64"; else arch_label="amd64"; fi
         local url="https://go.dev/dl/go${go_ver}.darwin-${arch_label}.pkg"
         local dest="$SETUP_TMP/go-${go_ver}.pkg"
         info "Downloading Go $go_ver from $url ..."
@@ -1212,11 +1275,11 @@ configure_strix_environment() {
         return 0
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
-        info "[DRYRUN] Would set STRIX_LLM / LLM_API_KEY (+ optional LLM_API_BASE, PERPLEXITY_API_KEY) in ~/.zshenv."
+        info "[DRYRUN] Would set STRIX_LLM / LLM_API_KEY (+ optional LLM_API_BASE, PERPLEXITY_API_KEY) in $PROFILE_FILE."
         record "Strix config" "DryRun" ""
         return 0
     fi
-    warn "API keys are written to ~/.zshenv and exported. Clear them when done."
+    warn "API keys are written to $PROFILE_FILE and exported. Clear them when done."
     persist_env "STRIX_LLM" "$STRIX_LLM"
     persist_env "LLM_API_KEY" "$STRIX_API_KEY"
     persist_env "LLM_API_BASE" "$STRIX_API_BASE"
@@ -1224,7 +1287,7 @@ configure_strix_environment() {
     [ -z "$STRIX_LLM" ] && warn "STRIX_LLM not set -- Strix will prompt for the model on first run."
     [ -z "$STRIX_API_KEY" ] && warn "LLM_API_KEY not set -- Strix will prompt for the key on first run."
     ok "Strix environment configured."
-    record "Strix config" "Installed" "Env vars set in ~/.zshenv."
+    record "Strix config" "Installed" "Env vars set in $PROFILE_FILE."
 }
 
 # ---------------------------------------------------------------------------
@@ -1237,7 +1300,9 @@ install_docker() {
         record "Docker Desktop" "Present" ""
         return 0
     fi
-    local url="https://desktop.docker.com/mac/main/amd64/Docker.dmg"
+    local docker_arch
+    if [ "$ARCH" = "arm64" ]; then docker_arch="arm64"; else docker_arch="amd64"; fi
+    local url="https://desktop.docker.com/mac/main/${docker_arch}/Docker.dmg"
     if [ "$DRY_RUN" -eq 1 ]; then
         info "[DRYRUN] Would install Docker Desktop from $url"
         record "Docker Desktop" "DryRun" "$url"
@@ -1416,7 +1481,7 @@ select_github_repository() {
         ok "Repository cloned to $dest"
     fi
     persist_env "CLAUDIO_CURRENT_REPO" "$dest"
-    ok "CLAUDIO_CURRENT_REPO = $dest (~/.zshenv)"
+    ok "CLAUDIO_CURRENT_REPO = $dest ($PROFILE_FILE)"
     if command_exists code; then
         info "Opening repository in VS Code ..."
         code "$dest"
@@ -1444,10 +1509,13 @@ main() {
         echo "This script targets macOS only (Darwin)." >&2
         return 1
     fi
-    if [ "$(uname -m)" != "x86_64" ]; then
-        echo "This is the Intel (x86_64) build; detected $(uname -m). Use the Apple Silicon build instead." >&2
-        return 1
-    fi
+    case "$ARCH" in
+        x86_64|arm64) ;;
+        *)
+            echo "Unsupported architecture: $ARCH (this script supports x86_64 and arm64 Macs only)." >&2
+            return 1
+            ;;
+    esac
 
     if [ "$(id -u)" -eq 0 ]; then
         SUDO=""
