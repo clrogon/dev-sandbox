@@ -1,0 +1,53 @@
+name: Pinned fallback link check
+
+# Every URL used as a hardcoded fallback (Git/Python/Node/Npp/GH CLI/Supabase/
+# 7-Zip installers) goes stale the moment a newer release supersedes it on
+# GitHub Releases or python.org/nodejs.org. The provisioner scripts only fall
+# back to these when the dynamic resolver (GitHub API / directory listing)
+# fails, so a dead pinned URL can sit unnoticed for months. This job extracts
+# every pinned download URL from both scripts and checks it weekly.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # every Monday, 06:00 UTC
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - 'windows/Setup-ClaudeCodeSandbox.ps1'
+      - 'macos/Setup-ClaudeCodeSandbox.sh'
+
+jobs:
+  check-links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract pinned fallback URLs
+        id: extract
+        run: |
+          grep -Eiho "https://[A-Za-z0-9./_-]+\.(exe|msi|pkg|dmg|tar\.gz|zip)" \
+            windows/Setup-ClaudeCodeSandbox.ps1 macos/Setup-ClaudeCodeSandbox.sh \
+            | sort -u > urls.txt
+          echo "Found $(wc -l < urls.txt) pinned URL(s):"
+          cat urls.txt
+
+      - name: HEAD-check every URL
+        run: |
+          set +e
+          fail=0
+          while IFS= read -r url; do
+            [ -z "$url" ] && continue
+            code=$(curl -sL -o /dev/null -w '%{http_code}' --retry 2 --retry-delay 3 -I "$url")
+            if [ "$code" -ge 400 ] || [ "$code" -eq 000 ]; then
+              # Some hosts (GitHub release assets) reject HEAD; retry with a
+              # ranged GET before declaring it dead.
+              code=$(curl -sL -o /dev/null -w '%{http_code}' --retry 2 --retry-delay 3 -r 0-0 "$url")
+            fi
+            if [ "$code" -ge 400 ] || [ "$code" -eq 000 ]; then
+              echo "::error::DEAD LINK ($code): $url"
+              fail=1
+            else
+              echo "OK ($code): $url"
+            fi
+          done < urls.txt
+          exit $fail
