@@ -15,7 +15,8 @@
                              -> Supabase CLI -> Strix
       Tier 3.5 MCP layer     GitHub MCP -> Sequential Thinking MCP -> Memory MCP
                              -> Context7 MCP -> Sentry MCP -> Supabase MCP
-                             registered with opencode
+                             + mcp-config.json for Claude Code
+                             + the same servers registered with opencode
                              (global ~/.config/opencode/opencode.json)
       Tier 4   Heavy/GUI     VS Code -> Notepad++ -> 7-Zip -> PostgreSQL
       Tier 4.5 LSP layer     pyright -> ruff -> black -> isort -> mypy
@@ -27,8 +28,17 @@
                              -> Rust toolchain (rustup) -> rust-analyzer
                              Skipped by -SkipLsp. Auto-skips a stack when its
                              runtime (Node/uv/Go/Rust) is unavailable.
-      Tier 5   Config        Git identity ("Sandbox User" fallback if unset),
-                             Strix environment, Sentry environment vars
+      Tier 4.5 LSP layer     pyright -> ruff -> black -> isort -> mypy
+                             (Python, via `uv tool install`)
+                             -> typescript-language-server -> typescript
+                             -> eslint -> vscode-langservers-extracted
+                             (JS/TS, via `npm install -g`)
+                             -> Go runtime -> gopls
+                             -> Rust toolchain (rustup) -> rust-analyzer
+                             Skipped by -SkipLsp. Auto-skips a stack when its
+                             runtime (Node/uv/Go/Rust) is unavailable.
+      Tier 5   Config        Git identity (clrogon default), Strix environment,
+                             Sentry environment vars
       Tier 6   Docker        Docker Desktop, opt-in only, LAST because its
                              installer can request a reboot that would abort
                              anything queued behind it
@@ -61,7 +71,9 @@
     require Docker, so they work inside Windows Sandbox. Supabase MCP
     connects to a local or cloud Supabase project; the cloud/console commands
     work, the local 'supabase start' stack still needs Docker. All MCP
-    servers are merged into the global opencode config
+    servers get an entry in C:\Git\clrogon\mcp\mcp-config.json for Claude
+    Code, Strix, or any other mcpServers-format client, and the same servers
+    are merged into the global opencode config
     (~/.config/opencode/opencode.json) so opencode exposes them in every
     project. opencode reads its config only at startup -- restart it after
     the run for the MCP tools to appear.
@@ -88,10 +100,8 @@
 .PARAMETER PerplexityApiKey
     Optional PERPLEXITY_API_KEY, enables Strix search capability.
 .PARAMETER GithubUser
-    GitHub username used by Tier 7 (repo listing / clone). Optional --
-    if omitted, it's resolved from whichever account `gh auth status` is
-    logged in as (via `gh api user`). If that resolution fails, Tier 7
-    skips the repo picker with a warning rather than guessing a username.
+    GitHub username used by Tier 7 (repo listing / clone). Defaults under
+    -AcceptAll to 'clrogon'.
 .PARAMETER SentryAuthToken
     Optional SENTRY_AUTH_TOKEN for the Sentry MCP server.
 .PARAMETER SentryOrg
@@ -123,12 +133,7 @@
 .PARAMETER LogPath
     Transcript path. Defaults to %USERPROFILE%\Setup-ClaudeCodeSandbox_<ts>.log
 .PARAMETER Architecture
-    Force x64 or arm64 instead of auto-detecting. Must be 'x64' or 'arm64'
-    if supplied (validated manually, not via [ValidateSet], so this script
-    still works via `irm <url> | iex` -- ValidateSet on an unset optional
-    parameter throws under Invoke-Expression's current-scope binding, even
-    though the exact same script runs fine as a file or via
-    [scriptblock]::Create()).
+    Force x64 or arm64 instead of auto-detecting.
 
 .EXAMPLE
     .\Setup-ClaudeCodeSandbox.ps1 -AcceptAll
@@ -142,13 +147,13 @@
     .\Setup-ClaudeCodeSandbox.ps1 -DryRun -VerifyChecksums
 
 .EXAMPLE
-    Fully automated run with the workspace, MCP layer, and the
-    interactive GitHub repo picker (GithubUser is optional -- it defaults
-    to whichever account `gh auth login` authenticated):
+    Fully automated run with the clrogon workspace, MCP layer, and the
+    interactive GitHub repo picker:
 
     .\Setup-ClaudeCodeSandbox.ps1 -AcceptAll `
-        -GitUserName 'YOUR-NAME' -GitUserEmail 'you@example.com' `
-        -StrixLlm 'anthropic/claude-sonnet-4-6' -StrixApiKey $env:ANTHROPIC_API_KEY
+        -GitUserName 'clrogon' -GitUserEmail 'clrogon@gmail.com' `
+        -StrixLlm 'anthropic/claude-sonnet-4-6' -StrixApiKey $env:ANTHROPIC_API_KEY `
+        -GithubUser 'clrogon'
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -181,7 +186,7 @@ param(
     [string]$StrixApiBase,
     [string]$PerplexityApiKey,
 
-    [string]$GithubUser,
+    [string]$GithubUser = 'clrogon',
     [string]$SentryAuthToken,
     [string]$SentryOrg,
 
@@ -198,7 +203,7 @@ param(
     [switch]$AcceptAll,
     [switch]$NoCleanup,
     [string]$LogPath,
-    [string]$Architecture
+    [ValidateSet('x64', 'arm64')][string]$Architecture
 )
 
 Set-StrictMode -Version Latest
@@ -227,53 +232,26 @@ $script:UserBinDir       = Join-Path $env:USERPROFILE '.local\bin'
 # Tier 7 workspace state. -WorkspaceRoot is overridable; subfolders are the
 # recommended layout from the v3.2 spec (projects, archive, mcp, logs,
 # scripts, templates, powershell, architecture, security, downloads).
-# 'mcp' has no writer right now (the old mcp-config.json generator was
-# removed as orphaned -- see CHANGELOG) but is kept reserved for real
-# Claude Code MCP registration if that's added later.
 $script:WorkspaceRoot    = $WorkspaceRoot
 $script:WorkspaceFolders = @(
     'projects', 'archive', 'mcp', 'logs',
     'scripts', 'templates', 'powershell',
     'architecture', 'security', 'downloads'
 )
-# Single source of truth for the MCP server list is ../config/mcp-packages.json
-# (shared with the macOS script). Falls back to this embedded copy so the
-# script still works standalone -- e.g. downloaded as a lone file, outside a
-# clone of the dev-sandbox repo. Keep this fallback in sync with the JSON.
-$script:McpServerMap = [ordered]@{
-    github     = '@modelcontextprotocol/server-github'
-    sequential = '@modelcontextprotocol/server-sequential-thinking'
-    memory     = '@modelcontextprotocol/server-memory'
-    context7   = '@upstash/context7-mcp'
-    sentry     = '@sentry/mcp-server'
-    supabase   = '@supabase/mcp-server-supabase'
-}
-if ($PSScriptRoot) {
-    $mcpConfigPath = Join-Path $PSScriptRoot '..\config\mcp-packages.json'
-    if (Test-Path -LiteralPath $mcpConfigPath) {
-        try {
-            $mcpJson = Get-Content -Raw -LiteralPath $mcpConfigPath | ConvertFrom-Json
-            $loaded  = [ordered]@{}
-            foreach ($entry in $mcpJson.servers) {
-                if ($entry.key -and $entry.package) { $loaded[$entry.key] = $entry.package }
-            }
-            if ($loaded.Count -gt 0) {
-                $script:McpServerMap = $loaded
-            } else {
-                Write-Warning "$mcpConfigPath has no valid entries -- using the embedded MCP server list."
-            }
-        } catch {
-            Write-Warning "Could not parse $mcpConfigPath ($($_.Exception.Message)) -- using the embedded MCP server list."
-        }
-    }
-}
+$script:McpDir            = Join-Path $script:WorkspaceRoot 'mcp'
+$script:McpConfigPath     = Join-Path $script:McpDir 'mcp-config.json'
+$script:McpPackages       = @(
+    '@modelcontextprotocol/server-github',
+    '@modelcontextprotocol/server-sequential-thinking',
+    '@modelcontextprotocol/server-memory',
+    '@upstash/context7-mcp',
+    '@sentry/mcp-server',
+    '@supabase/mcp-server-supabase'
+)
 
 New-Item -ItemType Directory -Path $script:TempDir -Force | Out-Null
 
 if ($Architecture) {
-    if ($Architecture -notin @('x64', 'arm64')) {
-        throw "-Architecture must be 'x64' or 'arm64' (got '$Architecture')."
-    }
     $script:Architecture = $Architecture
 } else {
     $rawArch = if ($env:PROCESSOR_ARCHITEW6432) {
@@ -1170,12 +1148,12 @@ function Set-StrixEnvironment {
 }
 
 # ---------------------------------------------------------------------------
-# Tier 3.5 -- MCP servers (npm packages)
+# Tier 3.5 -- MCP servers (npm packages) + mcp-config.json
 # ---------------------------------------------------------------------------
 
 function Install-McpServers {
     <#
-        All six installable MCP servers from the v3.2 spec are pure Node.js
+        All five installable MCP servers from the v3.2 spec are pure Node.js
         packages and run via `npx -y <pkg>` or as global bins. None require
         Docker, so they behave correctly inside Windows Sandbox. Supabase MCP
         talks to a cloud project by default; the local 'supabase start' stack
@@ -1188,12 +1166,10 @@ function Install-McpServers {
         Set-Result -Tool 'MCP servers' -Status 'Skipped' -Detail 'npm unavailable.'
         return
     }
-    $packages = @($script:McpServerMap.Values)
-
     if ($DryRun) {
-        Write-Info "[DRYRUN] Would install $($packages.Count) MCP packages via npm -g:"
-        foreach ($pkg in $packages) { Write-Info "  - $pkg" }
-        Set-Result -Tool 'MCP servers' -Status 'DryRun' -Detail ($packages -join ', ')
+        Write-Info "[DRYRUN] Would install $($script:McpPackages.Count) MCP packages via npm -g:"
+        foreach ($pkg in $script:McpPackages) { Write-Info "  - $pkg" }
+        Set-Result -Tool 'MCP servers' -Status 'DryRun' -Detail ($script:McpPackages -join ', ')
         return
     }
     if (-not $PSCmdlet.ShouldProcess('MCP servers', 'npm install -g (multiple packages)')) {
@@ -1205,7 +1181,7 @@ function Install-McpServers {
     $installed = 0
     $failed    = @()
 
-    foreach ($pkg in $packages) {
+    foreach ($pkg in $script:McpPackages) {
         Write-Info "Installing $pkg ..."
         # npm is a .cmd shim -- use the call operator, not Start-Process.
         & npm install -g $pkg --no-fund --no-audit
@@ -1220,8 +1196,8 @@ function Install-McpServers {
     Update-SessionPath
 
     if ($failed.Count -eq 0) {
-        Write-Ok "All $($packages.Count) MCP servers installed."
-        Set-Result -Tool 'MCP servers' -Status 'Installed' -Detail "$installed/$($packages.Count) packages"
+        Write-Ok "All $($script:McpPackages.Count) MCP servers installed."
+        Set-Result -Tool 'MCP servers' -Status 'Installed' -Detail "$installed/$($script:McpPackages.Count) packages"
     } elseif ($installed -gt 0) {
         Write-Warn2 "Partial MCP install: $installed succeeded, $($failed.Count) failed ($($failed -join ', '))."
         Set-Result -Tool 'MCP servers' -Status 'Warning' -Detail "Failed: $($failed -join ', ')"
@@ -1231,13 +1207,80 @@ function Install-McpServers {
     }
 }
 
+function Configure-McpJson {
+    <#
+        Emits C:\Git\clrogon\mcp\mcp-config.json with one entry per server.
+        Confidential tokens (GITHUB_PERSONAL_ACCESS_TOKEN, SENTRY_AUTH_TOKEN,
+        SUPABASE_ACCESS_TOKEN) are NOT written here -- the MCP servers read
+        them from the environment. Configure-McpJson only declares commands
+        and args, so the file is safe to commit and to share between clients
+        (Claude Code, OpenCode, Strix, VS Code MCP host).
+    #>
+    Write-Step "Writing mcp-config.json"
+
+    if ($DryRun) {
+        Write-Info "[DRYRUN] Would write $($script:McpConfigPath)"
+        Set-Result -Tool 'MCP config' -Status 'DryRun' -Detail $script:McpConfigPath
+        return
+    }
+    if (-not $PSCmdlet.ShouldProcess('mcp-config.json', 'Write MCP server registry')) {
+        Set-Result -Tool 'MCP config' -Status 'Skipped' -Detail 'Declined by ShouldProcess/-WhatIf.'
+        return
+    }
+
+    if (-not (Test-Path -LiteralPath $script:McpDir)) {
+        New-Item -ItemType Directory -Path $script:McpDir -Force | Out-Null
+    }
+
+    $config = [ordered]@{
+        mcpServers = [ordered]@{
+            github      = [ordered]@{
+                command = 'npx'
+                args    = @('-y', '@modelcontextprotocol/server-github')
+            }
+            sequential  = [ordered]@{
+                command = 'npx'
+                args    = @('-y', '@modelcontextprotocol/server-sequential-thinking')
+            }
+            memory      = [ordered]@{
+                command = 'npx'
+                args    = @('-y', '@modelcontextprotocol/server-memory')
+            }
+            context7    = [ordered]@{
+                command = 'npx'
+                args    = @('-y', '@upstash/context7-mcp')
+            }
+            sentry      = [ordered]@{
+                command = 'npx'
+                args    = @('-y', '@sentry/mcp-server')
+            }
+            supabase    = [ordered]@{
+                command = 'npx'
+                args    = @('-y', '@supabase/mcp-server-supabase')
+            }
+        }
+    }
+
+    try {
+        # ConvertTo-Json -Depth 10 keeps the nested structure intact.
+        $json = $config | ConvertTo-Json -Depth 10
+        $json | Set-Content -Path $script:McpConfigPath -Encoding UTF8
+        Write-Ok "MCP config written to $($script:McpConfigPath)"
+        Set-Result -Tool 'MCP config' -Status 'Installed' -Detail $script:McpConfigPath
+    } catch {
+        Write-Fail "Could not write mcp-config.json : $($_.Exception.Message)"
+        Set-Result -Tool 'MCP config' -Status 'Failed' -Detail $_.Exception.Message
+    }
+}
+
 function Configure-OpencodeMcp {
     <#
         Registers the same six MCP servers with opencode by writing them into
         the GLOBAL opencode config (~/.config/opencode/opencode.json), so they
         are available in every project, not just C:\Git\clrogon.
 
-        Uses opencode's own schema (mcp key, type: local, command as an array).
+        Uses opencode's own schema (mcp key, type: local, command as an array)
+        -- NOT the Claude Code mcpServers format from Configure-McpJson.
         Existing config is preserved: only the named servers are merged in,
         and $schema is added if absent.
 
@@ -1248,7 +1291,17 @@ function Configure-OpencodeMcp {
 
     $configDir  = Join-Path $env:USERPROFILE '.config\opencode'
     $configPath = Join-Path $configDir 'opencode.json'
-    $serverMap  = $script:McpServerMap
+
+    # Key -> package map mirrors Configure-McpJson exactly, so both clients
+    # see identical server names.
+    $serverMap = [ordered]@{
+        github     = '@modelcontextprotocol/server-github'
+        sequential = '@modelcontextprotocol/server-sequential-thinking'
+        memory     = '@modelcontextprotocol/server-memory'
+        context7   = '@upstash/context7-mcp'
+        sentry     = '@sentry/mcp-server'
+        supabase   = '@supabase/mcp-server-supabase'
+    }
 
     if ($DryRun) {
         Write-Info "[DRYRUN] Would register $($serverMap.Count) MCP servers in $configPath"
@@ -1437,10 +1490,9 @@ function Connect-GitHub {
 
 function Select-GitHubRepository {
     <#
-        Lists the authenticated user's repos (defaults to whichever account
-        `gh auth status` is logged in as; override with -GithubUser to browse
-        someone else's public repos), presents a numbered menu, clones the
-        selection into C:\Git\clrogon\projects\<name>, opens it in VS Code, and persists
+        Lists the authenticated user's repos (default: clrogon, overridable
+        via -GithubUser), presents a numbered menu, clones the selection into
+        C:\Git\clrogon\projects\<name>, opens it in VS Code, and persists
         the path to CLAUDIO_CURRENT_REPO (User scope) so downstream MCPs,
         Claude Code, OpenCode, Strix, and VS Code tasks can discover the
         active project without re-prompting.
@@ -1452,8 +1504,7 @@ function Select-GitHubRepository {
     Write-Step "Selecting GitHub repository to clone"
 
     if ($DryRun) {
-        $dryRunUser = if ($GithubUser) { $GithubUser } else { '<gh-authenticated-user>' }
-        Write-Info "[DRYRUN] Would: gh repo list $dryRunUser --limit 200, present menu, clone selection into $script:WorkspaceRoot\projects"
+        Write-Info "[DRYRUN] Would: gh repo list $GithubUser --limit 200, present menu, clone selection into $script:WorkspaceRoot\projects"
         Set-Result -Tool 'Repository clone' -Status 'DryRun'
         return
     }
@@ -1483,15 +1534,6 @@ function Select-GitHubRepository {
         Write-Warn2 "Not authenticated to GitHub. Run Connect-GitHub first (or re-run without -SkipWorkspace)."
         Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'gh not authenticated.'
         return
-    }
-
-    if (-not $GithubUser) {
-        $GithubUser = (& gh api user --jq '.login' 2>$null)
-        if (-not $GithubUser) {
-            Write-Warn2 "Could not resolve the authenticated GitHub user -- pass -GithubUser explicitly."
-            Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'GithubUser not resolved.'
-            return
-        }
     }
 
     Write-Info "Loading repositories for '$GithubUser' (limit 200) ..."
@@ -1550,7 +1592,7 @@ function Select-GitHubRepository {
         Write-Ok "Repository already present at $destination -- skipping clone."
     } else {
         Write-Info "Cloning $($repo.url) into $destination ..."
-        & gh repo clone "$GithubUser/$($repo.name)" $destination
+        & gh repo clone "clrogon/$($repo.name)" $destination
         if ($LASTEXITCODE -ne 0) {
             Write-Fail "gh repo clone failed (exit $LASTEXITCODE)."
             Set-Result -Tool 'Repository clone' -Status 'Failed' -Detail "gh repo clone exit $LASTEXITCODE"
@@ -1970,9 +2012,33 @@ function Install-GoLsp {
             return
         }
         $extractBase = Join-Path $env:ProgramFiles 'Go'
-        if (Test-Path $extractBase) { Remove-Item $extractBase -Recurse -Force -ErrorAction SilentlyContinue }
+        # Pre-clean: remove the existing Go tree so ZipFile::ExtractToDirectory
+        # never encounters a pre-existing file (it throws IOException on conflict).
+        if (Test-Path -LiteralPath $extractBase) {
+            Write-Info "Removing existing Go tree at $extractBase ..."
+            Remove-Item -LiteralPath $extractBase -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Write-Info "Extracting Go $goVer (~80 MB, may take 30-60 s) ..."
         try {
-            Expand-Archive -Path $dest -DestinationPath $env:ProgramFiles -Force -ErrorAction Stop
+            # ZipFile::ExtractToDirectory is a pure .NET call with NO ShouldProcess /
+            # confirmation machinery. Expand-Archive -Force calls ShouldProcess for
+            # every directory it creates (~400 in the Go tree), which in PS 5.1
+            # prompts the user even when $ConfirmPreference = 'None', looping
+            # until every subdirectory is confirmed individually.
+            Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+            [System.IO.Compression.ZipFile]::ExtractToDirectory($dest, $env:ProgramFiles)
+        } catch [System.IO.IOException] {
+            # A stale partial extraction left some files behind.
+            # Wipe and retry once rather than failing outright.
+            Write-Warn2 "Extraction hit an IO conflict -- clearing $extractBase and retrying ..."
+            Remove-Item -LiteralPath $extractBase -Recurse -Force -ErrorAction SilentlyContinue
+            try {
+                [System.IO.Compression.ZipFile]::ExtractToDirectory($dest, $env:ProgramFiles)
+            } catch {
+                Write-Fail "Go zip extraction failed on retry: $($_.Exception.Message)"
+                Set-Result -Tool 'Go LSP' -Status 'Failed' -Detail $_.Exception.Message
+                return
+            }
         } catch {
             Write-Fail "Go zip extraction failed: $($_.Exception.Message)"
             Set-Result -Tool 'Go LSP' -Status 'Failed' -Detail $_.Exception.Message
@@ -2293,8 +2359,9 @@ try {
     Invoke-Stage -Name 'Supabase CLI' -Skip:$SkipSupabase -SkipReason 'Skipped by -SkipSupabase' -Action { Install-SupabaseCli }
     Invoke-Stage -Name 'Strix'        -Skip:$SkipStrix    -SkipReason 'Skipped by -SkipStrix'    -Action { Install-Strix }
 
-    # ---- Tier 3.5: MCP layer (npm packages) --------------------------------
+    # ---- Tier 3.5: MCP layer (npm packages + config) ----------------------
     Invoke-Stage -Name 'MCP servers' -Skip:$SkipMcp -SkipReason 'Skipped by -SkipMcp' -Action { Install-McpServers }
+    Invoke-Stage -Name 'MCP config'  -Skip:$SkipMcp -SkipReason 'Skipped by -SkipMcp' -Action { Configure-McpJson }
     Invoke-Stage -Name 'Opencode MCP' -Skip:$SkipMcp -SkipReason 'Skipped by -SkipMcp' -Action { Configure-OpencodeMcp }
 
     # ---- Tier 4: heavy / GUI ----------------------------------------------
