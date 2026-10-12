@@ -1,0 +1,39 @@
+name: Windows dry-run smoke test
+
+# Manual-only (workflow_dispatch): verifies windows/Setup-ClaudeCodeSandbox.ps1
+# parses and runs end-to-end under -DryRun on a real Windows runner. Does not
+# gate pushes/PRs -- run it by hand (Actions tab -> this workflow -> Run
+# workflow) after changing the script, then check the logged output.
+
+on:
+  workflow_dispatch:
+    inputs:
+      extra_args:
+        description: 'Extra arguments appended to the -DryRun invocation'
+        required: false
+        default: ''
+
+jobs:
+  dry-run:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Setup-ClaudeCodeSandbox.ps1 -DryRun
+        shell: pwsh
+        run: |
+          $extra = "${{ github.event.inputs.extra_args }}"
+          $argList = @(
+            '-DryRun', '-AcceptAll', '-InstallAll',
+            '-ClaudeProfile', 'ci-smoke-test',
+            '-GitUserName', 'CI Runner',
+            '-GitUserEmail', 'ci@localhost.invalid'
+          )
+          if ($extra) { $argList += ($extra -split '\s+') }
+          Write-Host "Invoking: windows/Setup-ClaudeCodeSandbox.ps1 $($argList -join ' ')"
+          & "$PWD/windows/Setup-ClaudeCodeSandbox.ps1" @argList
+          Write-Host "Exit code: $LASTEXITCODE"
+          # Informational run: a DryRun 'Failed' entry (e.g. a transient
+          # GitHub API lookup) is useful signal, not a reason to redden this
+          # job -- surface it in the log instead of failing the step.
+          exit 0

@@ -19,15 +19,14 @@
                              + the same servers registered with opencode
                              (global ~/.config/opencode/opencode.json)
       Tier 4   Heavy/GUI     VS Code -> Notepad++ -> 7-Zip -> PostgreSQL
-      Tier 4.5 LSP layer     pyright -> ruff -> black -> isort -> mypy
-                             (Python, via `uv tool install`)
-                             -> typescript-language-server -> typescript
-                             -> eslint -> vscode-langservers-extracted
-                             (JS/TS, via `npm install -g`)
-                             -> Go runtime -> gopls
-                             -> Rust toolchain (rustup) -> rust-analyzer
-                             Skipped by -SkipLsp. Auto-skips a stack when its
-                             runtime (Node/uv/Go/Rust) is unavailable.
+                             -> storytold creative suite (artcraft,
+                             photocraft, wordcraft, vectorcraft, pdfcraft,
+                             lightcraft, cadcraft, effectcraft, soundcraft,
+                             gridcraft, filmcraft): each is an independent
+                             GitHub repo under github.com/storytold that
+                             publishes its own Windows MSI release; resolved
+                             and installed individually, failures isolated
+                             per app like every other Tier 4 tool.
       Tier 4.5 LSP layer     pyright -> ruff -> black -> isort -> mypy
                              (Python, via `uv tool install`)
                              -> typescript-language-server -> typescript
@@ -38,7 +37,8 @@
                              Skipped by -SkipLsp. Auto-skips a stack when its
                              runtime (Node/uv/Go/Rust) is unavailable.
       Tier 5   Config        Git identity (clrogon default), Strix environment,
-                             Sentry environment vars
+                             Sentry environment vars, Claude Code named
+                             profile (-ClaudeProfile; sets CLAUDE_CONFIG_DIR)
       Tier 6   Docker        Docker Desktop, opt-in only, LAST because its
                              installer can request a reboot that would abort
                              anything queued behind it
@@ -85,6 +85,26 @@
     CLAUDIO_CURRENT_REPO environment variable so downstream MCPs / VS Code
     tasks can auto-discover the active project without re-prompting.
 
+    STORYTOLD NOTE: artcraft, photocraft, wordcraft, vectorcraft, pdfcraft,
+    lightcraft, cadcraft, effectcraft, soundcraft, gridcraft and filmcraft
+    are separate repos under github.com/storytold, each building its own
+    Windows MSI via its own release pipeline -- naming conventions differ
+    per repo (e.g. wordcraft-<ver>-windows-x64.msi vs
+    ArtCraft_<ver>_x64_en-US.msi), so each is resolved independently against
+    its own /releases/latest the same way Get-GitHubLatestAsset already
+    resolves Git/Notepad++/7-Zip. These are GUI desktop apps with no
+    reliable CLI binary or fixed install path to probe for presence, so
+    -Force semantics do not apply here -- every run re-invokes msiexec,
+    which is a no-op/repair when the same version is already installed.
+    artcraft-services (backend/web code) and artcraftx (undocumented) are
+    excluded as neither ships an end-user installer.
+
+    INSTALL/SKIP-ALL NOTE: -InstallAll forces every -Skip* switch to $false
+    (including -SkipStorytold) and implies -InstallDocker unless
+    -InstallDocker was already explicitly supplied. -SkipAll forces every
+    -Skip* switch to $true. They are mutually exclusive. Neither touches
+    Git or Python (Tier 1): those have no -Skip switch and always run.
+
 .PARAMETER GitUserName
     Global git user.name. Defaults under -AcceptAll to 'Sandbox User'.
 .PARAMETER GitUserEmail
@@ -102,6 +122,15 @@
 .PARAMETER GithubUser
     GitHub username used by Tier 7 (repo listing / clone). Defaults under
     -AcceptAll to 'clrogon'.
+.PARAMETER ClaudeProfile
+    Optional named profile for Claude Code. Creates
+    %USERPROFILE%\.claude-profiles\<name> and points CLAUDE_CONFIG_DIR
+    (User scope; see https://code.claude.com/docs/en/env-vars) at it, so
+    this profile gets its own isolated sign-in, settings, session history
+    and plugins -- separate from the default ~/.claude and from any other
+    named profile on this machine. Does not select or create a
+    subscription; run 'claude' once per profile to sign in. Omit to leave
+    Claude Code on its default ~/.claude config.
 .PARAMETER SentryAuthToken
     Optional SENTRY_AUTH_TOKEN for the Sentry MCP server.
 .PARAMETER SentryOrg
@@ -128,12 +157,27 @@
 .PARAMETER AcceptAll
     Fully unattended: auto-accept vendor installer scripts, suppress all
     confirmation, apply default Git identity if none supplied.
+.PARAMETER InstallAll
+    Forces every -Skip* switch (including -SkipStorytold) to $false,
+    regardless of what was also passed on the command line, and implies
+    -InstallDocker unless -InstallDocker was itself explicitly supplied.
+    Mutually exclusive with -SkipAll. Git and Python (Tier 1) have no
+    -Skip switch and always run regardless.
+.PARAMETER SkipAll
+    Forces every -Skip* switch (including -SkipStorytold) to $true.
+    Mutually exclusive with -InstallAll. Does not affect -InstallDocker
+    (still opt-in) or Git/Python (Tier 1; no -Skip switch, always run).
 .PARAMETER NoCleanup
     Keep the temporary download directory.
 .PARAMETER LogPath
     Transcript path. Defaults to %USERPROFILE%\Setup-ClaudeCodeSandbox_<ts>.log
 .PARAMETER Architecture
-    Force x64 or arm64 instead of auto-detecting.
+    Force x64 or arm64 instead of auto-detecting. Must be 'x64' or 'arm64'
+    if supplied (validated manually, not via [ValidateSet], so this script
+    still works via `irm <url> | iex` -- ValidateSet on an unset optional
+    parameter throws under Invoke-Expression's current-scope binding, even
+    though the exact same script runs fine as a file or via
+    [scriptblock]::Create()).
 
 .EXAMPLE
     .\Setup-ClaudeCodeSandbox.ps1 -AcceptAll
@@ -145,6 +189,19 @@
 
 .EXAMPLE
     .\Setup-ClaudeCodeSandbox.ps1 -DryRun -VerifyChecksums
+
+.EXAMPLE
+    Everything, including opt-in Docker and the storytold suite, with a
+    named Claude Code profile:
+
+    .\Setup-ClaudeCodeSandbox.ps1 -AcceptAll -InstallAll `
+        -ClaudeProfile 'clrogon-work'
+
+.EXAMPLE
+    Skip every optional stage (Git/Python still run) -- environment
+    validation only:
+
+    .\Setup-ClaudeCodeSandbox.ps1 -AcceptAll -SkipAll -DryRun
 
 .EXAMPLE
     Fully automated run with the clrogon workspace, MCP layer, and the
@@ -177,6 +234,10 @@ param(
     [switch]$SkipGitIdentity,
     [switch]$SkipWorkspace,
     [switch]$SkipRepoClone,
+    [switch]$SkipStorytold,
+
+    [switch]$InstallAll,
+    [switch]$SkipAll,
 
     [string]$GitUserName,
     [string]$GitUserEmail,
@@ -189,6 +250,7 @@ param(
     [string]$GithubUser = 'clrogon',
     [string]$SentryAuthToken,
     [string]$SentryOrg,
+    [string]$ClaudeProfile,
 
     [string]$WorkspaceRoot = 'C:\Git\clrogon',
 
@@ -203,7 +265,7 @@ param(
     [switch]$AcceptAll,
     [switch]$NoCleanup,
     [string]$LogPath,
-    [ValidateSet('x64', 'arm64')][string]$Architecture
+    [string]$Architecture
 )
 
 Set-StrictMode -Version Latest
@@ -216,6 +278,25 @@ if ($AcceptAll) {
     $ConfirmPreference = 'None'
     $PSDefaultParameterValues['*:Confirm'] = $false
 }
+
+if ($InstallAll -and $SkipAll) {
+    Write-Host "FATAL: -InstallAll and -SkipAll are mutually exclusive." -ForegroundColor Red
+    exit 1
+}
+if ($InstallAll) {
+    $SkipNode = $SkipUv = $SkipBun = $SkipDeno = $SkipGh = $SkipClaude = $SkipOpenCode = `
+        $SkipVite = $SkipGrok = $SkipSupabase = $SkipStrix = $SkipMcp = $SkipVSCode = `
+        $SkipNotepad = $SkipSevenZip = $SkipPostgres = `
+        $SkipLsp = $SkipGitIdentity = $SkipWorkspace = $SkipRepoClone = $SkipStorytold = $false
+    if (-not $PSBoundParameters.ContainsKey('InstallDocker')) { $InstallDocker = $true }
+}
+if ($SkipAll) {
+    $SkipNode = $SkipUv = $SkipBun = $SkipDeno = $SkipGh = $SkipClaude = $SkipOpenCode = `
+        $SkipVite = $SkipGrok = $SkipSupabase = $SkipStrix = $SkipMcp = $SkipVSCode = `
+        $SkipNotepad = $SkipSevenZip = $SkipPostgres = `
+        $SkipLsp = $SkipGitIdentity = $SkipWorkspace = $SkipRepoClone = $SkipStorytold = $true
+}
+
 [Net.ServicePointManager]::SecurityProtocol =
     [Net.SecurityProtocolType]::Tls12 -bor [Net.SecurityProtocolType]::Tls11
 
@@ -249,9 +330,22 @@ $script:McpPackages       = @(
     '@supabase/mcp-server-supabase'
 )
 
+# Tier 4 -- storytold.com's "craft" suite: independent GitHub repos, each
+# with its own release pipeline/MSI naming (see STORYTOLD NOTE above).
+# artcraft-services (backend/web) and artcraftx (undocumented) are not
+# end-user installers and are excluded.
+$script:StorytoldApps = @(
+    'artcraft', 'photocraft', 'wordcraft', 'vectorcraft', 'pdfcraft',
+    'lightcraft', 'cadcraft', 'effectcraft', 'soundcraft', 'gridcraft', 'filmcraft'
+)
+
 New-Item -ItemType Directory -Path $script:TempDir -Force | Out-Null
 
 if ($Architecture) {
+    if ($Architecture -notin @('x64', 'arm64')) {
+        Write-Host "FATAL: -Architecture must be 'x64' or 'arm64', got '$Architecture'." -ForegroundColor Red
+        exit 1
+    }
     $script:Architecture = $Architecture
 } else {
     $rawArch = if ($env:PROCESSOR_ARCHITEW6432) {
@@ -567,6 +661,26 @@ function Get-LatestGhRelease {
 function Get-LatestSupabaseCliRelease {
     $pattern = if ($script:Architecture -eq 'arm64') { 'windows_arm64\.tar\.gz$' } else { 'windows_amd64\.tar\.gz$' }
     return Get-GitHubLatestAsset -Repo 'supabase/cli' -Pattern $pattern -FriendlyName 'Supabase CLI'
+}
+
+function Get-LatestStorytoldRelease {
+    <#
+        Each storytold repo tags and names its Windows MSI differently (e.g.
+        wordcraft-0.5.0-windows-x64.msi vs ArtCraft_0.41.0_x64_en-US.msi, and
+        tags like 'v0.5.0' vs 'artcraft-v0.41.0'), but every observed variant
+        puts the architecture token right before '.msi', and 'arm64' never
+        collides with the 'x64'/'amd64' substrings used for 64-bit x86 --
+        so one pair of patterns covers every repo without per-repo cases.
+        /releases/latest (via Get-GitHubLatestAsset) resolves correctly
+        regardless of tag-naming convention.
+    #>
+    param([Parameter(Mandatory)][string]$Repo)
+    $pattern = if ($script:Architecture -eq 'arm64') {
+        '(?i)arm64.*\.msi$'
+    } else {
+        '(?i)(x64|amd64).*\.msi$'
+    }
+    return Get-GitHubLatestAsset -Repo "storytold/$Repo" -Pattern $pattern -FriendlyName "storytold/$Repo"
 }
 
 function Get-LatestNodeRelease {
@@ -1857,6 +1971,64 @@ function Install-PostgreSQL {
     }
 }
 
+function Install-StorytoldApp {
+    <#
+        Generic installer for one storytold.com "craft" app. Unlike every
+        other GUI tool in this script (Notepad++, 7-Zip, ...) there is no
+        single fixed Program Files layout to probe for presence -- each
+        repo's bundler names its own install directory/exe, and guessing
+        wrong per-app is worse than not guessing. -Force therefore has no
+        effect here: every run re-invokes msiexec, which is a no-op/repair
+        when the same version is already installed, never a broken one.
+    #>
+    param([Parameter(Mandatory)][string]$Repo)
+    $friendlyName = "storytold/$Repo"
+    Write-Step "Checking $friendlyName"
+
+    $resolved = Get-LatestStorytoldRelease -Repo $Repo
+    if (-not $resolved) {
+        Write-Fail "No Windows MSI found for $friendlyName (dynamic lookup failed; this app has no pinned fallback, unlike Git/Node/etc -- it ships no stable, infrequently-changing release track to pin against)."
+        Set-Result -Tool $friendlyName -Status 'Failed' -Detail 'No URL resolvable.'
+        return
+    }
+
+    if ($DryRun) {
+        Write-Info "[DRYRUN] Would install $friendlyName from: $($resolved.Url)"
+        Set-Result -Tool $friendlyName -Status 'DryRun' -Detail $resolved.Url
+        return
+    }
+    if (-not $PSCmdlet.ShouldProcess($friendlyName, 'Download + silent install')) {
+        Set-Result -Tool $friendlyName -Status 'Skipped' -Detail 'Declined by ShouldProcess/-WhatIf.'
+        return
+    }
+
+    $dest = Join-Path $script:TempDir (Split-Path $resolved.Url -Leaf)
+    if (-not (Get-RemoteFile -Url $resolved.Url -Destination $dest -FriendlyName $friendlyName)) {
+        Set-Result -Tool $friendlyName -Status 'Failed' -Detail 'Download failed.'
+        return
+    }
+    if (-not (Test-DownloadedFileHash -FilePath $dest -FriendlyName $friendlyName -ExpectedDigest $resolved.Digest)) {
+        Set-Result -Tool $friendlyName -Status 'Failed' -Detail 'Checksum mismatch.'
+        return
+    }
+
+    $installed = Invoke-SilentInstaller -Path $dest -FriendlyName $friendlyName -Arguments @('/qn', '/norestart')
+    if ($installed) {
+        Write-Ok "$friendlyName installed successfully."
+        Set-Result -Tool $friendlyName -Status 'Installed'
+    } else {
+        Write-Fail "$friendlyName installation failed."
+        Set-Result -Tool $friendlyName -Status 'Failed' -Detail 'Installer reported failure.'
+    }
+}
+
+function Install-StorytoldSuite {
+    Write-Step "Installing storytold.com creative suite ($($script:StorytoldApps.Count) apps)"
+    foreach ($repo in $script:StorytoldApps) {
+        Install-StorytoldApp -Repo $repo
+    }
+}
+
 # ---------------------------------------------------------------------------
 # Tier 4.5 -- LSP / language tooling (Python + JS/TS + Go + Rust)
 # ---------------------------------------------------------------------------
@@ -2230,6 +2402,46 @@ function Set-GitIdentity {
     Set-Result -Tool 'Git identity' -Status 'Installed' -Detail "$UserName <$UserEmail>"
 }
 
+function Set-ClaudeProfile {
+    <#
+        Claude Code reads CLAUDE_CONFIG_DIR (documented at
+        https://code.claude.com/docs/en/env-vars) to relocate its config,
+        session history, credentials and plugins away from the default
+        ~/.claude (%USERPROFILE%\.claude on Windows). Pointing it at a
+        name-scoped folder under ~/.claude-profiles gives -ClaudeProfile
+        its own fully isolated sign-in, settings and plugin set, separate
+        from the default profile and from any other named profile on this
+        machine. This does NOT create or select a subscription/quota --
+        it only separates credentials; sign in with 'claude' once per
+        profile.
+    #>
+    param([Parameter(Mandatory)][string]$ProfileName)
+    Write-Step "Configuring Claude Code profile '$ProfileName'"
+
+    if (-not (Test-CommandExists -Name 'claude')) {
+        Write-Warn2 "'claude' not on PATH (Tier 3 skipped or failed). Setting CLAUDE_CONFIG_DIR anyway -- it takes effect once Claude Code is installed."
+    }
+
+    $profileDir = Join-Path $env:USERPROFILE ".claude-profiles\$ProfileName"
+
+    if ($DryRun) {
+        Write-Info "[DRYRUN] Would create $profileDir and set CLAUDE_CONFIG_DIR to it (User scope)."
+        Set-Result -Tool 'Claude profile' -Status 'DryRun' -Detail $profileDir
+        return
+    }
+    if (-not $PSCmdlet.ShouldProcess('Claude Code profile', "Set CLAUDE_CONFIG_DIR to $profileDir")) {
+        Set-Result -Tool 'Claude profile' -Status 'Skipped' -Detail 'Declined by ShouldProcess/-WhatIf.'
+        return
+    }
+
+    New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
+    Set-PersistentEnvVar -Name 'CLAUDE_CONFIG_DIR' -Value $profileDir
+
+    Write-Ok "CLAUDE_CONFIG_DIR = $profileDir (User scope)."
+    Write-Warn2 "Fresh, empty profile -- run 'claude' and sign in once. It shares no login, settings, history or plugins with the default ~/.claude or any other named profile."
+    Set-Result -Tool 'Claude profile' -Status 'Installed' -Detail $profileDir
+}
+
 # ---------------------------------------------------------------------------
 # Tier 6 -- Docker Desktop (last: its installer can request a reboot)
 # ---------------------------------------------------------------------------
@@ -2316,6 +2528,9 @@ try {
     Write-Host " Log            : $LogPath"
     if ($VerifyChecksums) { Write-Host " Checksums      : ENABLED" -ForegroundColor Green }
     if ($DryRun)          { Write-Host " DRY RUN        : no changes will be made" -ForegroundColor Yellow }
+    if ($InstallAll)      { Write-Host " Install mode   : -InstallAll (every -Skip* forced off)" -ForegroundColor Green }
+    if ($SkipAll)         { Write-Host " Install mode   : -SkipAll (every -Skip* forced on)" -ForegroundColor Yellow }
+    if ($ClaudeProfile)   { Write-Host " Claude profile : $ClaudeProfile" }
 
     if (-not $isAdmin) {
         Write-Warn2 "Not elevated. Python (InstallAllUsers=1), PostgreSQL, MSI packages and Docker Desktop need administrator rights and will fail. Re-run from an elevated PowerShell."
@@ -2369,6 +2584,7 @@ try {
     Invoke-Stage -Name 'Notepad++'  -Skip:$SkipNotepad  -SkipReason 'Skipped by -SkipNotepad'  -Action { Install-Notepad }
     Invoke-Stage -Name '7-Zip'      -Skip:$SkipSevenZip -SkipReason 'Skipped by -SkipSevenZip' -Action { Install-7Zip }
     Invoke-Stage -Name 'PostgreSQL' -Skip:$SkipPostgres -SkipReason 'Skipped by -SkipPostgres' -Action { Install-PostgreSQL }
+    Invoke-Stage -Name 'storytold suite' -Skip:$SkipStorytold -SkipReason 'Skipped by -SkipStorytold' -Action { Install-StorytoldSuite }
 
     # ---- Tier 4.5: LSP / language tooling ----------------------------------
     Invoke-Stage -Name 'LSP servers' -Skip:$SkipLsp -SkipReason 'Skipped by -SkipLsp' -Action { Install-LspServers }
@@ -2376,6 +2592,9 @@ try {
     # ---- Tier 5: configuration --------------------------------------------
     Invoke-Stage -Name 'Git identity' -Skip:$SkipGitIdentity -SkipReason 'Skipped by -SkipGitIdentity' -Action {
         Set-GitIdentity -UserName $GitUserName -UserEmail $GitUserEmail
+    }
+    Invoke-Stage -Name 'Claude profile' -Skip:(-not $ClaudeProfile) -SkipReason 'No -ClaudeProfile supplied.' -Action {
+        Set-ClaudeProfile -ProfileName $ClaudeProfile
     }
     Invoke-Stage -Name 'Strix config' -Skip:$SkipStrix -SkipReason 'Skipped by -SkipStrix' -Action {
         Set-StrixEnvironment
