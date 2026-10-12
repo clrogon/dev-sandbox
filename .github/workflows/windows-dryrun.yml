@@ -1,0 +1,46 @@
+name: Windows dry-run smoke test
+
+# Verifies windows/Setup-ClaudeCodeSandbox.ps1 parses and runs end-to-end
+# under -DryRun on a real Windows runner. Fires on any push that touches the
+# script (any branch, not just the default one -- workflow_dispatch would
+# need the file merged to the default branch first to be API-dispatchable,
+# which this intentionally avoids). Also exposed as workflow_dispatch for
+# later manual re-runs once this file exists on the default branch. Does not
+# gate merges -- informational only; check the logged output after a run.
+
+on:
+  push:
+    paths:
+      - 'windows/Setup-ClaudeCodeSandbox.ps1'
+      - '.github/workflows/windows-dryrun.yml'
+  workflow_dispatch:
+    inputs:
+      extra_args:
+        description: 'Extra arguments appended to the -DryRun invocation'
+        required: false
+        default: ''
+
+jobs:
+  dry-run:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run Setup-ClaudeCodeSandbox.ps1 -DryRun
+        shell: pwsh
+        run: |
+          $extra = "${{ github.event.inputs.extra_args }}"
+          $argList = @(
+            '-DryRun', '-AcceptAll', '-InstallAll',
+            '-ClaudeProfile', 'ci-smoke-test',
+            '-GitUserName', 'CI Runner',
+            '-GitUserEmail', 'ci@localhost.invalid'
+          )
+          if ($extra) { $argList += ($extra -split '\s+') }
+          Write-Host "Invoking: windows/Setup-ClaudeCodeSandbox.ps1 $($argList -join ' ')"
+          & "$PWD/windows/Setup-ClaudeCodeSandbox.ps1" @argList
+          Write-Host "Exit code: $LASTEXITCODE"
+          # Informational run: a DryRun 'Failed' entry (e.g. a transient
+          # GitHub API lookup) is useful signal, not a reason to redden this
+          # job -- surface it in the log instead of failing the step.
+          exit 0
