@@ -43,9 +43,12 @@
                              installer can request a reboot that would abort
                              anything queued behind it
       Tier 7   Workspace     C:\Git\clrogon folder tree, gh auth login,
-                             interactive GitHub repo picker, clone into
-                             C:\Git\clrogon\projects, open in VS Code,
-                             persist selected repo to CLAUDIO_CURRENT_REPO
+                             GitHub repo picker (multi-select, e.g.
+                             '1,3,5-7', or fully unattended via
+                             -GithubReposToClone), clone each into
+                             C:\Git\clrogon\projects, open each in VS Code,
+                             persist the last one cloned to
+                             CLAUDIO_CURRENT_REPO
 
     Key behavioural differences from v2.x:
 
@@ -80,10 +83,15 @@
 
     TIER 7 NOTE: The interactive repo picker and 'gh auth login --web' open
     a browser session. They are skipped under -AcceptAll -SkipWorkspace or
-    when GitHub CLI is unavailable. The picker clones into
-    C:\Git\clrogon\projects and writes the selected path to the User-scope
+    when GitHub CLI is unavailable. The picker accepts a comma/range
+    selection (e.g. '1,3,5-7'), not just a single number, so one run can
+    clone several repos instead of re-running the whole script per repo.
+    Passing -GithubReposToClone skips the menu entirely and clones exactly
+    that list -- the fully unattended path for -AcceptAll runs or scripted
+    batch cloning. Either way, every repo clones into C:\Git\clrogon\projects
+    and opens in VS Code; the LAST one cloned is written to the User-scope
     CLAUDIO_CURRENT_REPO environment variable so downstream MCPs / VS Code
-    tasks can auto-discover the active project without re-prompting.
+    tasks can auto-discover it without re-prompting.
 
     STORYTOLD NOTE: artcraft, photocraft, wordcraft, vectorcraft, pdfcraft,
     lightcraft, cadcraft, effectcraft, soundcraft, gridcraft and filmcraft
@@ -120,8 +128,16 @@
 .PARAMETER PerplexityApiKey
     Optional PERPLEXITY_API_KEY, enables Strix search capability.
 .PARAMETER GithubUser
-    GitHub username used by Tier 7 (repo listing / clone). Defaults under
-    -AcceptAll to 'clrogon'.
+    GitHub username used by Tier 7 (repo listing / clone, and as the owner
+    prefix for -GithubReposToClone entries that don't already specify one).
+    Defaults under -AcceptAll to 'clrogon'.
+.PARAMETER GithubReposToClone
+    Optional list of repos to clone in Tier 7, bypassing the interactive
+    menu entirely. Each entry is either a bare name (resolved as
+    "$GithubUser/<name>") or an explicit "owner/name". Use this for a
+    fully unattended -AcceptAll run, or to batch-clone many repos in one
+    invocation instead of re-running the whole script per repo. Example:
+    -GithubReposToClone 'dev-sandbox','someoneelse/other-repo'.
 .PARAMETER ClaudeProfile
     Optional named profile for Claude Code. Creates
     %USERPROFILE%\.claude-profiles\<name> and points CLAUDE_CONFIG_DIR
@@ -211,6 +227,15 @@
         -GitUserName 'clrogon' -GitUserEmail 'clrogon@gmail.com' `
         -StrixLlm 'anthropic/claude-sonnet-4-6' -StrixApiKey $env:ANTHROPIC_API_KEY `
         -GithubUser 'clrogon'
+
+.EXAMPLE
+    Batch-clone several repos in one unattended run instead of re-running
+    the whole script per repo (skips the Tier 7 menu entirely -- note:
+    -SkipAll would also skip the Workspace/GitHub-auth/Repository-clone
+    stages themselves, so don't combine it with -GithubReposToClone):
+
+    .\Setup-ClaudeCodeSandbox.ps1 -AcceptAll `
+        -GithubUser 'clrogon' -GithubReposToClone 'dev-sandbox','photocraft'
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -248,6 +273,7 @@ param(
     [string]$PerplexityApiKey,
 
     [string]$GithubUser = 'clrogon',
+    [string[]]$GithubReposToClone = @(),
     [string]$SentryAuthToken,
     [string]$SentryOrg,
     [string]$ClaudeProfile,
@@ -1602,23 +1628,129 @@ function Connect-GitHub {
     Set-Result -Tool 'GitHub auth' -Status 'Installed'
 }
 
+function Resolve-RepoSelectionIndices {
+    <#
+        Parses a picker selection string like '1,3,5-7' against the 1-based
+        range 1..$Count. Returns a sorted, de-duplicated int[] of valid
+        indices, or $null for empty/'0'/entirely-invalid input. Unknown
+        tokens are warned about and skipped rather than failing the whole
+        selection, so one typo in a range doesn't throw away the rest.
+    #>
+    param(
+        [Parameter(Mandatory)][string]$Selection,
+        [Parameter(Mandatory)][int]$Count
+    )
+    $Selection = $Selection.Trim()
+    if (-not $Selection -or $Selection -eq '0') { return $null }
+
+    $indices = New-Object System.Collections.Generic.List[int]
+    foreach ($part in ($Selection -split ',')) {
+        $part = $part.Trim()
+        if (-not $part) { continue }
+        if ($part -match '^(\d+)-(\d+)$') {
+            $lo = [int]$Matches[1]; $hi = [int]$Matches[2]
+            if ($lo -gt $hi) { $tmp = $lo; $lo = $hi; $hi = $tmp }
+            for ($n = $lo; $n -le $hi; $n++) { $indices.Add($n) }
+        } elseif ($part -match '^\d+$') {
+            $indices.Add([int]$part)
+        } else {
+            Write-Warn2 "Ignoring unrecognized selection token '$part'."
+        }
+    }
+
+    $valid = @($indices | Sort-Object -Unique | Where-Object { $_ -ge 1 -and $_ -le $Count })
+    if ($valid.Count -eq 0) { return $null }
+    return $valid
+}
+
+function Clone-GitHubRepo {
+    <#
+        Clones one repo ("owner/name") into
+        $script:WorkspaceRoot\projects\<Name>, persists CLAUDIO_CURRENT_REPO,
+        and opens it in VS Code. Shared by the interactive multi-select
+        picker and -GithubReposToClone so both paths behave identically
+        per repo. Returns the destination path on success, $null on
+        failure (clone failure only -- PATH/VS Code issues are warnings,
+        not failures, same as the rest of this script).
+    #>
+    param(
+        [Parameter(Mandatory)][string]$FullName,
+        [Parameter(Mandatory)][string]$Name
+    )
+    $destination = Join-Path $script:WorkspaceRoot "projects\$Name"
+    $destination = [System.IO.Path]::GetFullPath($destination)
+
+    if (Test-Path -LiteralPath $destination) {
+        Write-Ok "$Name already present at $destination -- skipping clone."
+    } else {
+        Write-Info "Cloning $FullName into $destination ..."
+        & gh repo clone $FullName $destination
+        if ($LASTEXITCODE -ne 0) {
+            Write-Fail "gh repo clone failed for $FullName (exit $LASTEXITCODE)."
+            return $null
+        }
+        Write-Ok "Repository cloned to $destination"
+    }
+
+    # Persist the active project so MCPs / Claude Code / OpenCode / Strix /
+    # VS Code tasks can auto-discover the workspace without re-prompting.
+    # On a multi-repo clone this ends up pointing at the LAST one cloned.
+    [Environment]::SetEnvironmentVariable('CLAUDIO_CURRENT_REPO', $destination, 'User')
+    Set-Item -Path 'Env:CLAUDIO_CURRENT_REPO' -Value $destination
+    Write-Ok "CLAUDIO_CURRENT_REPO = $destination (User scope)"
+
+    if (Test-CommandExists -Name 'code') {
+        Write-Info "Opening repository in VS Code (headless launch) ..."
+        & code $destination
+        if ($LASTEXITCODE -ne 0) {
+            Write-Warn2 "'code $destination' returned exit $LASTEXITCODE -- VS Code may not be on PATH yet."
+        }
+    } else {
+        Write-Warn2 "VS Code 'code' CLI not found in this session. Open $destination manually once PATH refreshes."
+    }
+
+    return $destination
+}
+
 function Select-GitHubRepository {
     <#
-        Lists the authenticated user's repos (default: clrogon, overridable
-        via -GithubUser), presents a numbered menu, clones the selection into
-        C:\Git\clrogon\projects\<name>, opens it in VS Code, and persists
-        the path to CLAUDIO_CURRENT_REPO (User scope) so downstream MCPs,
-        Claude Code, OpenCode, Strix, and VS Code tasks can discover the
-        active project without re-prompting.
+        Two modes:
+          -GithubReposToClone supplied -- clones exactly that list, no
+            'gh repo list' call and no prompt. Each entry is either a bare
+            name (resolved as "$GithubUser/<name>") or an explicit
+            "owner/name". The fully unattended path for -AcceptAll runs,
+            and the fix for "I need to run the script over and over for
+            each repo" -- one invocation, N repos.
+          Otherwise -- lists the authenticated user's repos (default:
+            clrogon, overridable via -GithubUser) and prompts for a
+            selection. The prompt takes a comma/range list (e.g.
+            '1,3,5-7'), not just a single number, so one interactive run
+            can still clone several repos.
+        Either way every repo clones into C:\Git\clrogon\projects\<name>,
+        opens in VS Code, and the LAST one cloned is persisted to
+        CLAUDIO_CURRENT_REPO (User scope) so downstream MCPs, Claude Code,
+        OpenCode, Strix, and VS Code tasks can discover it without
+        re-prompting.
 
         Skipped under -DryRun. Under -AcceptAll without -SkipWorkspace it
-        still runs because cloning requires a human pick -- there is no
-        safe default repo to auto-clone.
+        still runs because, without -GithubReposToClone, cloning requires
+        a human pick -- there is no safe default repo to auto-clone.
     #>
     Write-Step "Selecting GitHub repository to clone"
 
     if ($DryRun) {
-        Write-Info "[DRYRUN] Would: gh repo list $GithubUser --limit 200, present menu, clone selection into $script:WorkspaceRoot\projects"
+        if ($GithubReposToClone.Count -gt 0) {
+            # Resolve bare names to "owner/name" here too (not just in the
+            # real path below) so -DryRun actually exercises and shows the
+            # resolution logic, not just an unresolved echo of the input.
+            $resolved = @(foreach ($entry in $GithubReposToClone) {
+                $entry = $entry.Trim()
+                if ($entry) { if ($entry -match '/') { $entry } else { "$GithubUser/$entry" } }
+            })
+            Write-Info "[DRYRUN] Would clone $($resolved.Count) repo(s) into $script:WorkspaceRoot\projects : $($resolved -join ', ')"
+        } else {
+            Write-Info "[DRYRUN] Would: gh repo list $GithubUser --limit 200, present menu, clone selection(s) into $script:WorkspaceRoot\projects"
+        }
         Set-Result -Tool 'Repository clone' -Status 'DryRun'
         return
     }
@@ -1650,88 +1782,82 @@ function Select-GitHubRepository {
         return
     }
 
-    Write-Info "Loading repositories for '$GithubUser' (limit 200) ..."
-    $raw = & gh repo list $GithubUser --limit 200 --json name,url,updatedAt,isPrivate 2>$null
-    if ($LASTEXITCODE -ne 0 -or -not $raw) {
-        Write-Warn2 "gh repo list returned no repositories (exit $LASTEXITCODE)."
-        Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'No repositories listed.'
-        return
-    }
+    # $targets is a list of @{ FullName = 'owner/name'; Name = 'name' },
+    # built either straight from -GithubReposToClone or from the picker.
+    $targets = @()
 
-    $repos = $raw | ConvertFrom-Json
-    if (-not $repos -or $repos.Count -eq 0) {
-        Write-Warn2 "No repositories visible for '$GithubUser'."
-        Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'Empty repo list.'
-        return
-    }
-
-    # Sort: most recently updated first, so the active projects float to top.
-    $repos = @($repos | Sort-Object updatedAt -Descending)
-
-    Write-Host ""
-    Write-Host "Repositories for $GithubUser" -ForegroundColor White
-    Write-Host "------------------------------------------------------------" -ForegroundColor Gray
-    for ($i = 0; $i -lt $repos.Count; $i++) {
-        $priv = if ($repos[$i].isPrivate) { '(private)' } else { '' }
-        Write-Host ("[{0,3}] {1,-32} {2} {3}" -f ($i + 1), $repos[$i].name, $repos[$i].updatedAt, $priv)
-    }
-    Write-Host "------------------------------------------------------------" -ForegroundColor Gray
-    Write-Host "  0  Cancel" -ForegroundColor Gray
-    Write-Host ""
-
-    $selection = Read-Host "Select repository number (1-$($repos.Count), 0 to cancel)"
-    if (-not $selection) { $selection = '0' }
-    $idx = 0
-    if (-not ([int]::TryParse($selection, [ref]$idx))) {
-        Write-Warn2 "Invalid selection '$selection' -- must be a number."
-        Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'Non-numeric selection.'
-        return
-    }
-    if ($idx -eq 0) {
-        Write-Skip "Repository clone cancelled by user."
-        Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'User cancelled.'
-        return
-    }
-    if ($idx -lt 1 -or $idx -gt $repos.Count) {
-        Write-Warn2 "Selection out of range: $idx (must be 1-$($repos.Count))."
-        Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'Out of range.'
-        return
-    }
-
-    $repo = $repos[$idx - 1]
-    $destination = Join-Path $script:WorkspaceRoot "projects\$($repo.name)"
-    $destination = [System.IO.Path]::GetFullPath($destination)
-
-    if (Test-Path -LiteralPath $destination) {
-        Write-Ok "Repository already present at $destination -- skipping clone."
-    } else {
-        Write-Info "Cloning $($repo.url) into $destination ..."
-        & gh repo clone "clrogon/$($repo.name)" $destination
-        if ($LASTEXITCODE -ne 0) {
-            Write-Fail "gh repo clone failed (exit $LASTEXITCODE)."
-            Set-Result -Tool 'Repository clone' -Status 'Failed' -Detail "gh repo clone exit $LASTEXITCODE"
+    if ($GithubReposToClone.Count -gt 0) {
+        foreach ($entry in $GithubReposToClone) {
+            $entry = $entry.Trim()
+            if (-not $entry) { continue }
+            $fullName = if ($entry -match '/') { $entry } else { "$GithubUser/$entry" }
+            $name = ($fullName -split '/')[-1]
+            $targets += [pscustomobject]@{ FullName = $fullName; Name = $name }
+        }
+        if ($targets.Count -eq 0) {
+            Write-Warn2 "-GithubReposToClone supplied but resolved to no usable entries."
+            Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'Empty -GithubReposToClone.'
             return
         }
-        Write-Ok "Repository cloned to $destination"
-    }
-
-    # Persist the active project so MCPs / Claude Code / OpenCode / Strix /
-    # VS Code tasks can auto-discover the workspace without re-prompting.
-    [Environment]::SetEnvironmentVariable('CLAUDIO_CURRENT_REPO', $destination, 'User')
-    Set-Item -Path 'Env:CLAUDIO_CURRENT_REPO' -Value $destination
-    Write-Ok "CLAUDIO_CURRENT_REPO = $destination (User scope)"
-
-    if (Test-CommandExists -Name 'code') {
-        Write-Info "Opening repository in VS Code (headless launch) ..."
-        & code $destination
-        if ($LASTEXITCODE -ne 0) {
-            Write-Warn2 "'code $destination' returned exit $LASTEXITCODE -- VS Code may not be on PATH yet."
-        }
+        Write-Info "Cloning $($targets.Count) repo(s) from -GithubReposToClone (no menu)."
     } else {
-        Write-Warn2 "VS Code 'code' CLI not found in this session. Open $destination manually once PATH refreshes."
+        Write-Info "Loading repositories for '$GithubUser' (limit 200) ..."
+        $raw = & gh repo list $GithubUser --limit 200 --json name,url,updatedAt,isPrivate 2>$null
+        if ($LASTEXITCODE -ne 0 -or -not $raw) {
+            Write-Warn2 "gh repo list returned no repositories (exit $LASTEXITCODE)."
+            Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'No repositories listed.'
+            return
+        }
+
+        $repos = $raw | ConvertFrom-Json
+        if (-not $repos -or $repos.Count -eq 0) {
+            Write-Warn2 "No repositories visible for '$GithubUser'."
+            Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'Empty repo list.'
+            return
+        }
+
+        # Sort: most recently updated first, so the active projects float to top.
+        $repos = @($repos | Sort-Object updatedAt -Descending)
+
+        Write-Host ""
+        Write-Host "Repositories for $GithubUser" -ForegroundColor White
+        Write-Host "------------------------------------------------------------" -ForegroundColor Gray
+        for ($i = 0; $i -lt $repos.Count; $i++) {
+            $priv = if ($repos[$i].isPrivate) { '(private)' } else { '' }
+            Write-Host ("[{0,3}] {1,-32} {2} {3}" -f ($i + 1), $repos[$i].name, $repos[$i].updatedAt, $priv)
+        }
+        Write-Host "------------------------------------------------------------" -ForegroundColor Gray
+        Write-Host "  0  Cancel" -ForegroundColor Gray
+        Write-Host ""
+
+        $selection = Read-Host "Select repository number(s) (1-$($repos.Count); comma/range e.g. 1,3,5-7; 0 to cancel)"
+        $indices = Resolve-RepoSelectionIndices -Selection $selection -Count $repos.Count
+        if (-not $indices) {
+            Write-Skip "Repository clone cancelled or no valid selection."
+            Set-Result -Tool 'Repository clone' -Status 'Skipped' -Detail 'No valid selection.'
+            return
+        }
+
+        foreach ($idx in $indices) {
+            $repo = $repos[$idx - 1]
+            $targets += [pscustomobject]@{ FullName = "$GithubUser/$($repo.name)"; Name = $repo.name }
+        }
     }
 
-    Set-Result -Tool 'Repository clone' -Status 'Installed' -Detail $destination
+    $cloned = @()
+    $failed = @()
+    foreach ($target in $targets) {
+        $destination = Clone-GitHubRepo -FullName $target.FullName -Name $target.Name
+        if ($destination) { $cloned += $destination } else { $failed += $target.FullName }
+    }
+
+    if ($cloned.Count -eq 0) {
+        Set-Result -Tool 'Repository clone' -Status 'Failed' -Detail "All clones failed: $($failed -join ', ')"
+    } elseif ($failed.Count -gt 0) {
+        Set-Result -Tool 'Repository clone' -Status 'Warning' -Detail "Cloned $($cloned.Count): failed: $($failed -join ', ')"
+    } else {
+        Set-Result -Tool 'Repository clone' -Status 'Installed' -Detail ($cloned -join '; ')
+    }
 }
 
 # ---------------------------------------------------------------------------
