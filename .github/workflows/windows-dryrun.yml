@@ -35,12 +35,14 @@ jobs:
           # left every switch below at $false on the first run of this
           # workflow and let it perform a real, non-dry install instead.
           $params = @{
-            DryRun          = $true
-            AcceptAll       = $true
-            InstallAll      = $true
-            ClaudeProfile   = 'ci-smoke-test'
-            GitUserName     = 'CI Runner'
-            GitUserEmail    = 'ci@localhost.invalid'
+            DryRun               = $true
+            AcceptAll            = $true
+            InstallAll           = $true
+            ClaudeProfile        = 'ci-smoke-test'
+            GitUserName          = 'CI Runner'
+            GitUserEmail         = 'ci@localhost.invalid'
+            GithubUser           = 'clrogon'
+            GithubReposToClone   = @('dev-sandbox', 'someoneelse/other-repo')
           }
           $extra = "${{ github.event.inputs.extra_args }}"
           $extraArgs = @()
